@@ -771,6 +771,36 @@ function renderUpdate(info) {
   fitWindow();
 }
 
+// Holt Zeitereignistypen und Tätigkeitsstätten erneut — nötig, wenn beim
+// Öffnen des Fensters keine angemeldete SuccessFactors-Sitzung bestand.
+$("refresh-lists").addEventListener("click", () => {
+  renderStatus({ phase: "working", message: "Lade Listen …" });
+  chrome.runtime.sendMessage({ action: "refresh-lists" }, (res) => {
+    startTypes = (res && res.types) || [];
+    typeReason = (res && res.typeReason) || null;
+    endType = (res && res.endType) || null;
+    places = (res && res.places) || [];
+    placeReason = (res && res.placeReason) || null;
+
+    for (const t of startTypes) LABELS[t.code] = t.name;
+    if (endType) LABELS[endType] = "Ende";
+
+    fillTypeSelect($("startType"), fallbackType);
+    fillTypeSelect($("defaultStartType"), fallbackType);
+    fillPlaceSelect($("placeOfWork"), "");
+    fillPlaceSelect($("legacyPlaceId"), "");
+
+    const problem = typeReason || placeReason;
+    renderStatus(
+      problem
+        ? { phase: "error", message: problem }
+        : { phase: "ok", message: startTypes.length + " Typen, " + places.length + " Orte geladen" }
+    );
+    weekData = null;
+    if (!$("view-week").hidden) loadWeek(currentMonday);
+  });
+});
+
 $("check-update").addEventListener("click", () => {
   $("update-hint").textContent = "Prüfe …";
   chrome.runtime.sendMessage({ action: "check-update" }, renderUpdate);

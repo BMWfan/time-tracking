@@ -891,8 +891,16 @@ async function checkForUpdate({ quiet = true } = {}) {
       headers: { Accept: "application/vnd.github+json" }
     });
     if (!res.ok) {
-      const info = { checkedAt: Date.now(), error: "GitHub: Fehler " + res.status, current };
+      // Ein privates Repository antwortet ohne Anmeldung mit 404. Einen Token
+      // dafür in die Erweiterung zu legen wäre unangemessen, also bleibt die
+      // Prüfung in diesem Fall aus.
+      const error =
+        res.status === 404
+          ? "Keine öffentlichen Releases — Prüfung nicht möglich"
+          : "GitHub: Fehler " + res.status;
+      const info = { checkedAt: Date.now(), error, current };
       await chrome.storage.local.set({ updateInfo: info });
+      chrome.action.setBadgeText({ text: "" });
       return info;
     }
     const data = await res.json();
@@ -996,6 +1004,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "types") {
     loadTypes().then(({ start, end, reason }) =>
       sendResponse({ ok: true, types: start, endType: end, reason: reason || null })
+    );
+    return true;
+  }
+  if (msg.action === "refresh-lists") {
+    // Zwischenspeicher verwerfen und beide Listen erneut holen.
+    typeCache = null;
+    placeCache = null;
+    placeReason = null;
+    Promise.all([loadTypes(), loadPlaces()]).then(([types, places]) =>
+      sendResponse({
+        ok: true,
+        types: types.start,
+        endType: types.end,
+        typeReason: types.reason || null,
+        places,
+        placeReason: places.length ? null : placeReason
+      })
     );
     return true;
   }
