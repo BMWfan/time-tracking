@@ -227,7 +227,22 @@ async function acquireSfTab() {
   return { tabId: created.id, temporary: !neededLogin };
 }
 
-async function runInSf(func, args) {
+// Aufrufe werden hintereinander abgearbeitet. Sonst benutzt ein zweiter Abruf
+// den Hintergrund-Tab des ersten, und dessen Aufräumen reißt ihm den Boden weg
+// ("Frame with ID 0 was removed").
+let sfQueue = Promise.resolve();
+
+function runInSf(func, args) {
+  const run = () => runInSfNow(func, args);
+  const task = sfQueue.then(run, run);
+  sfQueue = task.then(
+    () => undefined,
+    () => undefined
+  );
+  return task;
+}
+
+async function runInSfNow(func, args) {
   const { tabId, temporary } = await acquireSfTab();
   try {
     const [{ result }] = await chrome.scripting.executeScript({
