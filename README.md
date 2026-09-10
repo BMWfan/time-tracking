@@ -42,6 +42,12 @@ Then load it unpacked:
 2. Enable **Developer mode**
 3. Choose **Load unpacked** and select the folder
 
+### Updates
+
+An extension loaded unpacked is never updated by the browser — `update_url` is ignored for those. Instead the extension checks once a day against this repository's latest release, puts a badge on its toolbar icon and shows a notification when a newer version exists; clicking it opens the release page. The *Settings* tab shows the installed version and checks on demand.
+
+Installing the update stays a manual step: download, replace the folder, press reload on the extensions page. Truly unattended updates would require a signed CRX, a hosted update manifest and an enterprise policy permitting installation from outside the store.
+
 The extension ID is pinned via the `key` field in `manifest.json`, so it stays the same across reloads — desktop shortcuts keep working.
 
 ### Desktop shortcuts (optional)

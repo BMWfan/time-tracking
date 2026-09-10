@@ -741,6 +741,94 @@ async function loadWeek(anyDateInWeek, waitForValuation = false) {
   }
 }
 
+// ----------------------------------------------------------- Aktualisierung
+
+// Entpackt geladene Erweiterungen aktualisiert der Browser nicht selbst.
+// Deshalb vergleichen wir die eigene Version täglich mit dem neuesten
+// GitHub-Release und melden uns, wenn eine neuere vorliegt. Installiert wird
+// nichts — das bleibt ein bewusster Schritt des Nutzers.
+const REPO = "BMWfan/peoplehub-time-tracking";
+const UPDATE_ALARM = "update-check";
+
+function parseVersion(text) {
+  return String(text || "").replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
+}
+
+// > 0, wenn a neuer als b ist.
+function compareVersions(a, b) {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+async function checkForUpdate({ quiet = true } = {}) {
+  const current = chrome.runtime.getManifest().version;
+  try {
+    const res = await fetch("https://api.github.com/repos/" + REPO + "/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" }
+    });
+    if (!res.ok) {
+      const info = { checkedAt: Date.now(), error: "GitHub: Fehler " + res.status, current };
+      await chrome.storage.local.set({ updateInfo: info });
+      return info;
+    }
+    const data = await res.json();
+    const latest = String(data.tag_name || "").replace(/^v/i, "");
+    const newer = compareVersions(latest, current) > 0;
+    const info = {
+      checkedAt: Date.now(),
+      current,
+      latest,
+      newer,
+      url: data.html_url || "https://github.com/" + REPO + "/releases",
+      notes: (data.name || "").slice(0, 120)
+    };
+    await chrome.storage.local.set({ updateInfo: info });
+
+    if (newer) {
+      chrome.action.setBadgeText({ text: "↑" });
+      chrome.action.setBadgeBackgroundColor({ color: "#FF9500" });
+      if (quiet) {
+        // Nur einmal je Version stören.
+        const { notifiedVersion } = await chrome.storage.local.get({ notifiedVersion: "" });
+        if (notifiedVersion === latest) return info;
+        await chrome.storage.local.set({ notifiedVersion: latest });
+      }
+      notify(
+        "peoplehub Time Tracking — Version " + latest + " verfügbar",
+        "Installiert ist " + current + ". Zum Herunterladen auf diese Meldung klicken."
+      );
+    } else {
+      chrome.action.setBadgeText({ text: "" });
+    }
+    return info;
+  } catch (err) {
+    const info = { checkedAt: Date.now(), error: String(err), current };
+    await chrome.storage.local.set({ updateInfo: info });
+    return info;
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create(UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: 60 * 24 });
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UPDATE_ALARM) checkForUpdate();
+});
+
+chrome.notifications.onClicked.addListener(async (id) => {
+  const { updateInfo } = await chrome.storage.local.get({ updateInfo: null });
+  if (updateInfo && updateInfo.newer && updateInfo.url) {
+    chrome.tabs.create({ url: updateInfo.url });
+    chrome.notifications.clear(id);
+  }
+});
+
 // ------------------------------------------------------------ Panelfenster
 
 // Ein echtes Fenster statt eines Action-Popups: Popups schließen sich, sobald
@@ -788,6 +876,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.action === "types") {
     loadTypes().then(({ start, end }) => sendResponse({ ok: true, types: start, endType: end }));
+    return true;
+  }
+  if (msg.action === "check-update") {
+    checkForUpdate({ quiet: false }).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "update-info") {
+    chrome.storage.local
+      .get({ updateInfo: null })
+      .then(({ updateInfo }) =>
+        sendResponse(updateInfo || { current: chrome.runtime.getManifest().version })
+      );
     return true;
   }
   if (msg.action === "places") {

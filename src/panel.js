@@ -559,6 +559,38 @@ $("save-settings").addEventListener("click", async () => {
   });
 });
 
+// ----------------------------------------------------------- Aktualisierung
+
+function renderUpdate(info) {
+  if (!info) return;
+  $("version-line").textContent = "Version " + (info.current || "—");
+
+  const hint = $("update-hint");
+  hint.textContent = "";
+  hint.className = "hint";
+
+  if (info.error) {
+    hint.textContent = "Prüfung fehlgeschlagen: " + info.error;
+    hint.classList.add("err");
+  } else if (info.newer) {
+    const text = document.createElement("span");
+    text.textContent = "Version " + info.latest + " ist verfügbar. ";
+    const link = document.createElement("button");
+    link.className = "link";
+    link.textContent = "Release öffnen";
+    link.addEventListener("click", () => chrome.tabs.create({ url: info.url }));
+    hint.append(text, link);
+  } else if (info.latest) {
+    hint.textContent = "Aktuellste Version installiert.";
+  }
+  fitWindow();
+}
+
+$("check-update").addEventListener("click", () => {
+  $("update-hint").textContent = "Prüfe …";
+  chrome.runtime.sendMessage({ action: "check-update" }, renderUpdate);
+});
+
 // ------------------------------------------------------- Fenstergroesse
 
 // chrome.windows rechnet in Bildschirmpixeln, das Layout in CSS-Pixeln. Bei
