@@ -351,6 +351,133 @@ function pageBook(assignmentId, entries) {
   })();
 }
 
+// Ersetzt die Zeitereignisse eines Tages. Ändern erlaubt SuccessFactors nicht
+// (update_mc ist false), Löschen nur über die gebundene Aktion RequestDeletion.
+// Für die Oberfläche sieht es nach Überschreiben aus.
+function pageReplaceDay(assignmentId, dateIso, entries) {
+  return (async () => {
+    const base = "/odatav4/timemanagement/timeeventprocessing/ManageClockInClockOut.svc/v2/";
+    const p = (n) => String(n).padStart(2, "0");
+
+    const csrf = async () => {
+      const probe = await fetch(base, {
+        credentials: "include",
+        headers: { "X-CSRF-Token": "Fetch", Accept: "application/json" }
+      });
+      return probe.headers.get("x-csrf-token");
+    };
+
+    try {
+      const token = await csrf();
+      if (!token) return { ok: false, msg: "Keine gültige SuccessFactors-Sitzung", needsLogin: true };
+
+      const filter =
+        "assignmentId eq '" + assignmentId + "' and timestampLocal ge " + dateIso +
+        "T00:00:00Z and timestampLocal le " + dateIso + "T23:59:59Z";
+      const listed = await fetch(
+        base + "TimeEvents?$orderby=timestampLocal&$top=50&$filter=" + encodeURIComponent(filter),
+        { credentials: "include", headers: { Accept: "application/json" } }
+      );
+      if (!listed.ok) return { ok: false, msg: "Bestand nicht lesbar (HTTP " + listed.status + ")" };
+      const existing = ((await listed.json()).value || []).filter((e) => e.externalId);
+
+      // Erst löschen: ein zweites Kommen neben einem offenen Paar lehnt
+      // SuccessFactors ab.
+      for (const event of existing) {
+        const res = await fetch(
+          base + "TimeEvents('" + encodeURIComponent(event.externalId) +
+            "')/ManageClockInClockOut.svc.RequestDeletion",
+          {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              "OData-Version": "4.0",
+              "X-CSRF-Token": token
+            },
+            body: "{}"
+          }
+        );
+        if (!res.ok) {
+          return {
+            ok: false,
+            msg: "Löschen von " + String(event.timestampLocal).slice(11, 16) +
+                 " fehlgeschlagen (HTTP " + res.status + ") — nichts verändert"
+          };
+        }
+      }
+
+      const results = [];
+      for (const entry of entries) {
+        const m = String(entry.time).match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) {
+          results.push({ ...entry, ok: false, msg: "Ungültige Uhrzeit" });
+          continue;
+        }
+        const when = new Date(dateIso + "T00:00:00");
+        when.setHours(Number(m[1]), Number(m[2]), 0, 0);
+        const offset = -when.getTimezoneOffset();
+        const abs = Math.abs(offset);
+        const tz = (offset >= 0 ? "+" : "-") + p(Math.floor(abs / 60)) + ":" + p(abs % 60);
+
+        const res = await fetch(base + "TimeEvents", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "OData-Version": "4.0",
+            "OData-MaxVersion": "4.0",
+            "Accept-Language": "de-DE",
+            "X-CSRF-Token": token
+          },
+          body: JSON.stringify({
+            assignmentId,
+            creationSource: "MANUAL",
+            timestampLocal:
+              dateIso + "T" + p(when.getHours()) + ":" + p(when.getMinutes()) + ":00Z",
+            timeZoneOffset: tz,
+            timeEventTypeCode: entry.type,
+            geoFenceCode: null
+          })
+        });
+
+        const raw = await res.text();
+        let created = null;
+        try {
+          created = JSON.parse(raw);
+        } catch {}
+        const status = created && created.validationStatus;
+        if (res.status === 201 && (!status || status === "SUCCESS")) {
+          results.push({ ...entry, ok: true });
+        } else {
+          const detail = ((created && created.validationMessages) || [])
+            .map((x) => x.message || "")
+            .filter(Boolean)
+            .join(" ");
+          results.push({
+            ...entry,
+            ok: false,
+            msg: detail || (created && created.error && created.error.message) ||
+                 "HTTP " + res.status
+          });
+        }
+      }
+
+      const failed = results.filter((r) => !r.ok);
+      return {
+        ok: failed.length === 0,
+        removed: existing.length,
+        results,
+        msg: failed.length ? failed[0].msg : ""
+      };
+    } catch (err) {
+      return { ok: false, msg: "Netzwerkfehler: " + String(err) };
+    }
+  })();
+}
+
 // Die für diesen Nutzer aktuell erlaubten Zeitereignistypen.
 function pageTypes(assignmentId) {
   return (async () => {
@@ -847,6 +974,56 @@ async function bookDays(items) {
   }
 }
 
+// Überschreibt einen Tag. Die Tätigkeitsstätte wird vorher gelesen und
+// hinterher wieder gesetzt — der Erfassungssatz entsteht beim Neuanlegen neu
+// und käme sonst ohne sie zurück.
+async function replaceDay({ date, in: inTime, out, type, placeId }) {
+  const cfg = await settings();
+  const { end } = await loadTypes();
+
+  if (!inTime || !out) return { ok: false, msg: "Kommen und Gehen müssen beide gesetzt sein" };
+  if (!end) return { ok: false, msg: "Gehen-Typ nicht ermittelbar" };
+
+  const entries = [
+    { time: inTime, type: type || cfg.startType },
+    { time: out, type: end }
+  ];
+  if (!entries[0].type) return { ok: false, msg: "Art des Kommens fehlt" };
+
+  setState("working", "Tag wird überschrieben …");
+  try {
+    // Bisheriger Ort sichern, falls im Formular keiner gewählt wurde.
+    const before = await loadWeek(date, false);
+    const previous = before && before.ok
+      ? (before.days.find((d) => d.date === date) || {}).placeId || null
+      : null;
+
+    const result = await runInSf(pageReplaceDay, [cfg.assignmentId, date, entries]);
+    if (!result || !result.ok) {
+      const msg = (result && result.msg) || "Überschreiben fehlgeschlagen";
+      setState("error", msg);
+      notify("Überschreiben fehlgeschlagen", msg);
+      return result || { ok: false, msg };
+    }
+
+    const wanted = placeId || previous;
+    if (wanted) {
+      // Der Erfassungssatz entsteht erst mit der Bewertung.
+      await loadWeek(date, true);
+      result.place = await setPlace(date, wanted);
+    }
+
+    setState("ok", "Tag überschrieben");
+    notify("Tag überschrieben", inTime + " – " + out);
+    result.week = await loadWeek(date, false);
+    return result;
+  } catch (err) {
+    const msg = String(err.message || err);
+    setState("error", msg);
+    return { ok: false, msg };
+  }
+}
+
 async function loadWeek(anyDateInWeek, waitForValuation = false) {
   const cfg = await settings();
   const monday = mondayOf(anyDateInWeek || new Date());
@@ -1096,6 +1273,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.action === "week") {
     loadWeek(msg.date || null, Boolean(msg.wait)).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "replace-day") {
+    replaceDay(msg.day || {}).then(sendResponse);
     return true;
   }
   if (msg.action === "book-days") {

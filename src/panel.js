@@ -81,17 +81,27 @@ for (const v of VIEWS) $("tab-" + v).addEventListener("click", () => showView(v)
 
 // ------------------------------------------------------------------ Status
 
+// Erfolg und Fehler sind Rückmeldungen zu einer Handlung, keine Zustände —
+// sie verschwinden von selbst wieder.
+let statusTimer = null;
+
 function renderStatus(st) {
   const { phase, message } = st || {};
   const busy = BUSY.has(phase);
   $("in").disabled = $("out").disabled = busy;
   $("book-all").disabled = busy;
 
+  clearTimeout(statusTimer);
+
   const box = $("status");
   if (!phase || phase === "idle") {
     box.className = "hidden";
     box.textContent = "";
     return;
+  }
+
+  if (phase === "ok" || phase === "error") {
+    statusTimer = setTimeout(() => renderStatus({ phase: "idle" }), phase === "ok" ? 5000 : 12000);
   }
 
   box.className = "";
@@ -302,26 +312,72 @@ function suggestion(day, cfgFallback) {
 let fallback = { in: "08:00", out: "16:45" };
 let fallbackType = "";
 
-// Auswahl plus Speichern für die Tätigkeitsstätte eines gebuchten Tages.
-function placeEditor(day, selectedId) {
-  const fields = document.createElement("div");
-  fields.className = "day-fields";
+// Formular zum Überschreiben eines gebuchten Tages: Zeiten, Art und Ort
+// vorbelegt. Im Hintergrund werden die Ereignisse gelöscht und neu angelegt,
+// weil SuccessFactors kein Ändern erlaubt — hier sieht es nach Bearbeiten aus.
+function dayEditor(day, onCancel) {
+  const first = day.events[0];
+  const last = day.events[day.events.length - 1];
+  const startEvent = day.events.find((e) => e.type !== endType) || first;
+
+  const box = document.createElement("div");
+
+  const times = document.createElement("div");
+  times.className = "day-fields";
+  const from = document.createElement("input");
+  from.type = "time";
+  from.step = 60;
+  from.value = first ? first.time : fallback.in;
+  const to = document.createElement("input");
+  to.type = "time";
+  to.step = 60;
+  to.value = last && last.type === endType ? last.time : fallback.out;
+  times.append(from, to);
+
+  const kind = document.createElement("select");
+  fillTypeSelect(kind, startEvent ? startEvent.type : fallbackType);
 
   const place = document.createElement("select");
-  fillPlaceSelect(place, selectedId);
+  fillPlaceSelect(place, day.placeId || day.suggestPlaceId || "");
 
+  const actions = document.createElement("div");
+  actions.className = "day-fields";
   const save = document.createElement("button");
-  save.textContent = "Ort sichern";
+  save.textContent = "Speichern";
+  const cancel = document.createElement("button");
+  cancel.className = "link";
+  cancel.textContent = "Abbrechen";
+  cancel.addEventListener("click", onCancel);
+
   save.addEventListener("click", () => {
+    if (to.value <= from.value) {
+      renderStatus({ phase: "error", message: "Das Gehen muss nach dem Kommen liegen" });
+      return;
+    }
     save.disabled = true;
     ask(
-            { action: "set-place", date: day.date, placeId: place.value || null },
-      () => loadWeek(currentMonday)
+      {
+        action: "replace-day",
+        day: {
+          date: day.date,
+          in: from.value,
+          out: to.value,
+          type: kind.value || null,
+          placeId: place.value || null
+        }
+      },
+      (res) => {
+        save.disabled = false;
+        if (res && res.week) applyWeek(res.week);
+        else loadWeek(currentMonday, true);
+      },
+      90000
     );
   });
 
-  fields.append(place, save);
-  return fields;
+  actions.append(save, cancel);
+  box.append(times, kind, place, actions);
+  return box;
 }
 
 function renderWeek(week) {
@@ -410,30 +466,31 @@ function renderWeek(week) {
         wrap.classList.remove("done");
       }
 
-      if (day.placeId) {
-        // Gesetzter Ort wird angezeigt; das Stiftsymbol öffnet die Korrektur.
-        const hit = places.find((p) => String(p.id) === String(day.placeId));
-        const line = document.createElement("div");
-        line.className = "src place-line";
+      // Der Stift öffnet den ganzen Tag zum Bearbeiten — Zeiten, Art, Ort.
+      const line = document.createElement("div");
+      line.className = "src place-line";
 
-        const label = document.createElement("span");
-        label.textContent = hit ? hit.label : "Tätigkeitsstätte gesetzt";
+      const label = document.createElement("span");
+      const hit = places.find((p) => String(p.id) === String(day.placeId));
+      label.textContent = day.placeId
+        ? hit
+          ? hit.label
+          : "Tätigkeitsstätte gesetzt"
+        : "Ohne Tätigkeitsstätte";
 
-        const edit = document.createElement("button");
-        edit.className = "icon-btn";
-        edit.title = "Tätigkeitsstätte ändern";
-        edit.setAttribute("aria-label", "Tätigkeitsstätte ändern");
-        edit.textContent = "✎";
-        edit.addEventListener("click", () => {
-          line.replaceWith(placeEditor(day, day.placeId));
-        });
+      const edit = document.createElement("button");
+      edit.className = "icon-btn";
+      edit.title = "Tag bearbeiten";
+      edit.setAttribute("aria-label", "Tag bearbeiten");
+      edit.textContent = "✎";
+      edit.addEventListener("click", () => {
+        const editor = dayEditor(day, () => editor.replaceWith(line));
+        line.replaceWith(editor);
+        fitWindow();
+      });
 
-        line.append(label, edit);
-        wrap.append(line);
-      } else if (day.hasAttendance) {
-        // Noch kein Ort hinterlegt: nachtragbar.
-        wrap.append(placeEditor(day, day.suggestPlaceId || ""));
-      }
+      line.append(label, edit);
+      wrap.append(line);
     } else if (isOpen(day)) {
       openCount++;
       const s = suggestion(day, fallback);
@@ -868,7 +925,10 @@ function fitWindow() {
 // ------------------------------------------------------------------- Start
 
 chrome.runtime.sendMessage({ action: "get-state" }, (st) => {
-  renderStatus(st);
+  // Eine abgeschlossene Meldung von vorhin gehört nicht in ein frisches Fenster.
+  const stale =
+    st && (st.phase === "ok" || st.phase === "error") && Date.now() - (st.updatedAt || 0) > 30000;
+  renderStatus(stale ? { phase: "idle" } : st);
   if ((auto === "in" || auto === "out") && !BUSY.has(st && st.phase)) book(auto);
 });
 
