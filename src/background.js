@@ -528,7 +528,10 @@ async function haTimes(cfg, startIso, endIso) {
     base + "/api/history/period/" + encodeURIComponent(start.toISOString()) +
     "?filter_entity_id=" + encodeURIComponent(cfg.haEntity) +
     "&end_time=" + encodeURIComponent(end.toISOString()) +
-    "&minimal_response&significant_changes_only";
+    // Kein significant_changes_only: Home Assistant filtert damit
+    // Zonenwechsel heraus, also genau die Ereignisse, die hier zählen.
+    // minimal_response bleibt, es lässt nur die Attribute weg.
+    "&minimal_response";
 
   try {
     const res = await fetch(url, { headers: { Authorization: "Bearer " + cfg.haToken } });
