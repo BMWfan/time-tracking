@@ -46,7 +46,7 @@ def main() -> None:
     print(f"{len(FILES) + 1} Dateien nach {target}")
     print("Version:", manifest["version"])
     print("Name:   ", manifest["name"])
-    print("Im Browser noch auf ⟳ klicken.")
+    print("Im Browser noch neu laden.")
 
 
 if __name__ == "__main__":
