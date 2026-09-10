@@ -108,6 +108,17 @@
   }
   select:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
   .day-fields select { flex:1 1 100%; padding:8px 10px; font-size:14px; }
+
+  /* Zeile im Bearbeiten-Formular: Uhrzeit, Art und Entfernen nebeneinander */
+  .editor-row { display:flex; gap:8px; align-items:center; margin-top:8px; }
+  .editor-row input[type=time] { flex:0 0 108px; padding:8px 10px; font-variant-numeric:tabular-nums; }
+  .editor-row select { flex:1 1 auto; padding:8px 10px; font-size:14px; }
+  .editor-row button {
+    flex:0 0 auto; padding:8px 14px; border:0; border-radius:var(--radius-sm);
+    background:var(--blue); color:#fff; font:inherit; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .editor-row button.link { background:none; color:var(--blue); font-weight:400; padding:8px 4px; }
+  .editor-row .icon-btn { padding:0; background:var(--fill); }
   input[type=time], input[type=text], input[type=url], input[type=password] {
     width:100%; padding:11px 12px; border:.5px solid var(--glass-line);
     border-radius:var(--radius-sm); font:inherit; color:var(--fg);

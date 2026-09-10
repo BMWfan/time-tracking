@@ -322,28 +322,109 @@ function suggestion(day, cfgFallback) {
 let fallback = { in: "08:00", out: "16:45" };
 let fallbackType = "";
 
-// Formular zum Bearbeiten eines gebuchten Tages: jedes Zeitereignis eine
-// Zeile mit Uhrzeit, Art und Papierkorb, dazu die Tätigkeitsstätte. Gespeichert
-// wird der Tag als Ganzes — SuccessFactors erlaubt kein Ändern einzelner
-// Ereignisse, also löscht der Dienst sie und legt die verbliebenen neu an.
+// Formular zum Bearbeiten eines gebuchten Tages: jedes Zeitereignis eine Zeile
+// mit Uhrzeit, Art und Papierkorb. Die Ortsfelder folgen den Zeilen, nicht dem
+// gespeicherten Stand — wird ein Paar entfernt, verschwindet sein Feld mit.
+// Gespeichert wird der Tag als Ganzes, weil SuccessFactors kein Ändern
+// einzelner Ereignisse erlaubt.
 function dayEditor(day, onCancel) {
   const box = document.createElement("div");
   const rows = document.createElement("div");
-  box.append(rows);
+  const placeBox = document.createElement("div");
+
+  // Zeilen brauchen alle Typen, auch den Gehen-Typ.
+  const rowTypes = endType
+    ? [...startTypes, { code: endType, name: LABELS[endType] || "Ende" }]
+    : startTypes;
+
+  function fillRowType(select, selected) {
+    select.textContent = "";
+    for (const t of rowTypes) {
+      const opt = document.createElement("option");
+      opt.value = t.code;
+      opt.textContent = t.name;
+      if (t.code === selected) opt.selected = true;
+      select.append(opt);
+    }
+    if (!rowTypes.length) {
+      const hint = document.createElement("option");
+      hint.value = "";
+      hint.disabled = true;
+      hint.selected = true;
+      hint.textContent = "— " + (typeReason || "keine Typen abrufbar") + " —";
+      select.append(hint);
+    }
+  }
+
+  function currentRows() {
+    return [...rows.querySelectorAll(".editor-row")]
+      .map((row) => ({
+        time: row.querySelector('input[data-role="time"]').value,
+        type: row.querySelector('select[data-role="type"]').value
+      }))
+      .filter((e) => e.time || e.type);
+  }
+
+  // Aus den Zeilen die Paare bilden: ein Gehen schließt das offene Kommen.
+  function pairsFromRows() {
+    const sorted = currentRows()
+      .filter((e) => e.time && e.type)
+      .sort((a, b) => a.time.localeCompare(b.time));
+    const pairs = [];
+    let open = null;
+    for (const entry of sorted) {
+      if (entry.type === endType) {
+        if (open) {
+          pairs.push({ start: open.time, end: entry.time });
+          open = null;
+        }
+      } else {
+        if (open) pairs.push({ start: open.time, end: null });
+        open = entry;
+      }
+    }
+    if (open) pairs.push({ start: open.time, end: null });
+    return pairs;
+  }
+
+  function renderPlaces() {
+    const chosen = [...placeBox.querySelectorAll('select[data-role="place"]')].map((el) => el.value);
+    placeBox.textContent = "";
+    const pairs = pairsFromRows();
+
+    pairs.forEach((pair, index) => {
+      const stored = (day.attendances || []).find((a) => a.start === pair.start);
+      const label = document.createElement("div");
+      label.className = "src";
+      label.textContent =
+        "Tätigkeitsstätte " + pair.start + (pair.end ? "–" + pair.end : " (offen)");
+      const select = document.createElement("select");
+      select.dataset.role = "place";
+      const preset =
+        chosen[index] !== undefined && chosen[index] !== ""
+          ? chosen[index]
+          : (stored && stored.placeId) || day.suggestPlaceId || "";
+      fillPlaceSelect(select, preset);
+      placeBox.append(label, select);
+    });
+    fitWindow();
+  }
 
   function addRow(time, type) {
     const row = document.createElement("div");
-    row.className = "day-fields";
+    row.className = "editor-row";
 
     const when = document.createElement("input");
     when.type = "time";
     when.step = 60;
     when.value = time || "";
     when.dataset.role = "time";
+    when.addEventListener("change", renderPlaces);
 
     const kind = document.createElement("select");
     kind.dataset.role = "type";
-    fillTypeSelect(kind, type || fallbackType);
+    fillRowType(kind, type || fallbackType);
+    kind.addEventListener("change", renderPlaces);
 
     const drop = document.createElement("button");
     drop.className = "icon-btn danger";
@@ -352,7 +433,7 @@ function dayEditor(day, onCancel) {
     drop.textContent = "✕";
     drop.addEventListener("click", () => {
       row.remove();
-      fitWindow();
+      renderPlaces();
     });
 
     row.append(when, kind, drop);
@@ -366,30 +447,11 @@ function dayEditor(day, onCancel) {
   add.textContent = "Zeitereignis hinzufügen";
   add.addEventListener("click", () => {
     addRow("", fallbackType);
-    fitWindow();
+    renderPlaces();
   });
 
-  // Ein Ort je Erfassungssatz: ein halber Tag Homeoffice und ein halber im
-  // Büro sind zwei Sätze mit zwei verschiedenen Stätten.
-  const placeBox = document.createElement("div");
-  const ranges = day.attendances && day.attendances.length
-    ? day.attendances
-    : [{ start: null, end: null, placeId: day.placeId || day.suggestPlaceId || null }];
-
-  for (const range of ranges) {
-    const label = document.createElement("div");
-    label.className = "src";
-    label.textContent = range.start
-      ? "Tätigkeitsstätte " + range.start + "–" + range.end
-      : "Tätigkeitsstätte";
-    const select = document.createElement("select");
-    select.dataset.role = "place";
-    fillPlaceSelect(select, range.placeId || day.suggestPlaceId || "");
-    placeBox.append(label, select);
-  }
-
   const actions = document.createElement("div");
-  actions.className = "day-fields";
+  actions.className = "editor-row";
   const save = document.createElement("button");
   save.textContent = "Speichern";
   const cancel = document.createElement("button");
@@ -398,16 +460,15 @@ function dayEditor(day, onCancel) {
   cancel.addEventListener("click", onCancel);
 
   save.addEventListener("click", () => {
-    const events = [...rows.querySelectorAll(".day-fields")].map((row) => ({
-      time: row.querySelector('input[data-role="time"]').value,
-      type: row.querySelector('select[data-role="type"]').value
-    }));
-
+    const events = currentRows();
     if (events.some((e) => !e.time || !e.type)) {
       renderStatus({ phase: "error", message: "Jede Zeile braucht Uhrzeit und Art" });
       return;
     }
-    if (!events.length && !confirm("Alle Zeitereignisse dieses Tages löschen?")) return;
+    if (!events.length) {
+      renderStatus({ phase: "error", message: "Mindestens ein Zeitereignis muss bleiben" });
+      return;
+    }
 
     const placeIds = [...placeBox.querySelectorAll('select[data-role="place"]')].map(
       (el) => el.value || null
@@ -418,7 +479,7 @@ function dayEditor(day, onCancel) {
       { action: "replace-day", day: { date: day.date, events, placeIds } },
       (res) => {
         save.disabled = false;
-        if (res && res.week) applyWeek(res.week);
+        if (res && res.ok && res.week) applyWeek(res.week);
         else loadWeek(currentMonday, true);
       },
       90000
@@ -426,7 +487,8 @@ function dayEditor(day, onCancel) {
   });
 
   actions.append(save, cancel);
-  box.append(add, placeBox, actions);
+  box.append(rows, add, placeBox, actions);
+  renderPlaces();
   return box;
 }
 
