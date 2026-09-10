@@ -1,0 +1,95 @@
+name: Release
+
+# Läuft bei jedem Push auf main. Ist die Version in manifest.json neu,
+# entstehen daraus ein Git-Tag und ein GitHub Release mit der gepackten
+# Extension als ZIP — Downloads brauchen also keinen eigenen Server.
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # für git tag + GitHub Release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --generate-notes braucht die volle History
+
+      - name: Read version from manifest.json
+        id: ver
+        run: |
+          VERSION=$(node -e "console.log(require('./manifest.json').version)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "zip=peoplehub-time-tracking-v${VERSION}.zip" >> $GITHUB_OUTPUT
+
+      - name: Skip if tag already exists
+        id: check
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/${TAG}$"; then
+            echo "Tag $TAG existiert bereits — kein Release."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $TAG ist neu."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate manifest.json
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json'));
+            if (m.manifest_version !== 3) throw new Error('Expected MV3');
+            if (!m.version) throw new Error('Missing version');
+            for (const f of [m.background.service_worker, ...Object.values(m.icons)]) {
+              if (!fs.existsSync(f)) throw new Error('Missing file: ' + f);
+            }
+            console.log('manifest.json OK  (version ' + m.version + ')');
+          "
+
+      - name: Syntax-check JS files
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          for f in src/*.js; do
+            node --check "$f" || exit 1
+          done
+          echo "All JS files OK."
+
+      - name: Build extension zip
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          ZIP="${{ steps.ver.outputs.zip }}"
+          zip -r "$ZIP" \
+            manifest.json \
+            panel.html \
+            src/ \
+            icons/ \
+            --exclude "*.DS_Store"
+          echo ""
+          echo "=== ZIP-Inhalt ==="
+          unzip -l "$ZIP"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          ZIP="${{ steps.ver.outputs.zip }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag=false \
+            "$ZIP#peoplehub Time Tracking ${VERSION} (Chrome/Edge Extension)"
+
+          echo "https://github.com/${{ github.repository }}/releases/tag/$TAG"

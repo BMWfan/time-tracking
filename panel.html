@@ -205,6 +205,26 @@
   .hint { font-size:13px; color:var(--muted); margin-top:12px; }
 
   .settings-field { margin-top:14px; }
+
+  /* Schalter für optionale Anbindungen */
+  .toggle-row {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    margin-top:20px; padding-top:16px; border-top:.5px solid var(--separator);
+  }
+  .toggle-label { margin:0; font-size:15px; color:var(--fg); }
+  .switch {
+    appearance:none; flex:0 0 auto; width:44px; height:26px; margin:0;
+    border-radius:13px; background:var(--fill-strong); position:relative;
+    cursor:pointer; transition:background .2s ease;
+  }
+  .switch::after {
+    content:""; position:absolute; top:2px; left:2px; width:22px; height:22px;
+    border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.3);
+    transition:transform .2s ease;
+  }
+  .switch:checked { background:var(--green); }
+  .switch:checked::after { transform:translateX(18px); }
+  .switch:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   section > p:first-child { margin-top:0; }
 </style>
 </head>
@@ -251,38 +271,60 @@
 
   <section id="view-settings" hidden>
     <div class="settings-field">
-      <label for="haUrl">Home-Assistant-Adresse</label>
-      <input id="haUrl" type="url" placeholder="http://homeassistant.local:8123">
-    </div>
-    <div class="settings-field">
-      <label for="haToken">Long-Lived Access Token</label>
-      <input id="haToken" type="password" placeholder="wird nur lokal gespeichert">
-    </div>
-    <div class="settings-field">
-      <label for="haEntity">Personen-Entität</label>
-      <input id="haEntity" type="text" placeholder="person.max">
-    </div>
-    <div class="settings-field">
-      <label for="haZone">Zonenname (Status-Text)</label>
-      <input id="haZone" type="text" placeholder="Work">
-    </div>
-    <div class="settings-field">
       <label for="assignmentId">Assignment-ID</label>
-      <input id="assignmentId" type="text">
+      <input id="assignmentId" type="text" placeholder="Personalnummer der Zuordnung">
     </div>
     <div class="settings-field">
       <label for="defaultStartType">Standard beim Kommen</label>
       <select id="defaultStartType"></select>
     </div>
     <div class="settings-field">
-      <label for="legacyPlaceId">Tätigkeitsstätte für Zonen ohne Code</label>
-      <select id="legacyPlaceId"></select>
+      <label for="fallbackIn">Standardzeiten — von / bis</label>
+      <div class="row" style="margin-top:0">
+        <input id="fallbackIn" type="time" step="60">
+        <input id="fallbackOut" type="time" step="60">
+      </div>
     </div>
-    <div class="row"><button id="save-settings" class="primary out">Speichern</button></div>
-    <p class="hint">
-      Token in Home Assistant anlegen: Profil → Sicherheit → „Langlebige Zugriffstoken“.
-      Er wird nur lokal in Chrome gespeichert.
+
+    <div class="toggle-row">
+      <label class="toggle-label" for="haEnabled">Home Assistant verwenden</label>
+      <input id="haEnabled" type="checkbox" class="switch">
+    </div>
+    <p class="hint" style="margin-top:6px">
+      Optional. Aktiviert füllt die Erweiterung Kommen und Gehen aus deiner
+      Standort-Historie vor und leitet die Tätigkeitsstätte aus der Zone ab.
+      Ohne die Anbindung gelten die Standardzeiten oben.
     </p>
+
+    <div id="ha-fields" hidden>
+      <div class="settings-field">
+        <label for="haUrl">Home-Assistant-Adresse</label>
+        <input id="haUrl" type="url" placeholder="http://homeassistant.local:8123">
+      </div>
+      <div class="settings-field">
+        <label for="haToken">Long-Lived Access Token</label>
+        <input id="haToken" type="password" placeholder="wird nur lokal gespeichert">
+      </div>
+      <div class="settings-field">
+        <label for="haEntity">Personen-Entität</label>
+        <input id="haEntity" type="text" placeholder="person.max">
+      </div>
+      <div class="settings-field">
+        <label for="haZone">Zonenname ohne Code (optional)</label>
+        <input id="haZone" type="text" placeholder="z. B. Work">
+      </div>
+      <div class="settings-field">
+        <label for="legacyPlaceId">Tätigkeitsstätte für Zonen ohne Code</label>
+        <select id="legacyPlaceId"></select>
+      </div>
+      <p class="hint">
+        Token anlegen in Home Assistant: Profil → Sicherheit → „Langlebige
+        Zugriffstoken“. Er wird nur lokal in Chrome gespeichert. Zonen brauchen
+        den Code der Tätigkeitsstätte in Klammern am Namensende.
+      </p>
+    </div>
+
+    <div class="row"><button id="save-settings" class="primary out">Speichern</button></div>
   </section>
 
   <div id="status" class="hidden"></div>

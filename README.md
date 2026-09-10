@@ -1,31 +1,46 @@
 # peoplehub Time Tracking
 
-A Chrome / Edge browser extension (Manifest V3) for **SAP SuccessFactors Time Tracking**. It books clock-in and clock-out events, fills in forgotten days from your [Home Assistant](https://www.home-assistant.io) location history, and sets the place of work — without opening the time sheet.
+A Chrome / Edge browser extension (Manifest V3) for **SAP SuccessFactors Time Tracking**. It books clock-in and clock-out events, fills in forgotten days, and sets the place of work — without opening the time sheet.
 
 Nothing tenant-specific is hard-coded. Event types, places of work and your assignment are read from your own SuccessFactors instance at runtime or configured in the extension's settings.
+
+[Home Assistant](https://www.home-assistant.io) is **optional**: switched on, it pre-fills arrival and departure from your location history and derives the place of work from the zone you were in. Switched off — the default — the extension works on its own with default times you adjust by hand.
 
 ---
 
 ## Features
 
+### Always available
+
 - **Clock in / clock out** from a small window, a keyboard shortcut, or a desktop shortcut — no visible page, no navigation
 - **Daily total after clocking out** — taken from SuccessFactors' own valuation, so the automatic break deduction is already applied
 - **Type of arrival** — office, home office, customer, travel … the list comes from `getActiveTimeEventTypesForUserAndDateTime`, so it always matches what your time profile accepts
-- **Fill in missed days** — a week view marks days without bookings and pre-fills arrival and departure from Home Assistant; correct them or accept them as they are
+- **Fill in missed days** — a week view marks days without bookings and offers editable arrival and departure fields
 - **Complete open days** — if only the clock-out is missing, the day offers just that field
-- **Place of work** — set automatically from the Home Assistant zone you were in, correctable at any time, including for days already booked
+- **Place of work** — pick it per day; correctable at any time, including for days already booked
 - **Silent single sign-on** — if the SuccessFactors session has expired, the extension opens a background tab; where SSO is silent you see nothing, otherwise it brings the tab forward, says it is waiting for the login and continues on its own afterwards
 - **Previous / next week** — corrections are not limited to the current week
+
+### With Home Assistant enabled
+
+- Arrival and departure are **pre-filled from your zone history** instead of default times
+- The **place of work** is derived from the zone you were in and written automatically after clocking out
+- The **type of arrival** defaults to home office on days with no work-zone visit
 
 ---
 
 ## Installation
 
-The extension is not in any store. Load it unpacked:
+The extension is not in any store. Grab it either way:
+
+- **Latest release** — download the ZIP from the [Releases](../../releases) page and unpack it
+- **Current main** — *Code → Download ZIP*, or `git clone`
+
+Then load it unpacked:
 
 1. Open `chrome://extensions` or `edge://extensions/`
 2. Enable **Developer mode**
-3. Choose **Load unpacked** and select this repository's folder
+3. Choose **Load unpacked** and select the folder
 
 The extension ID is pinned via the `key` field in `manifest.json`, so it stays the same across reloads — desktop shortcuts keep working.
 
@@ -49,28 +64,49 @@ msedge.exe --profile-directory="Default" --app=chrome-extension://<EXTENSION-ID>
 
 Everything tenant- and person-specific lives in the extension's **Settings** tab, stored in `chrome.storage.local`. Nothing of it is in this repository.
 
+### Required
+
 | Setting | Meaning |
 |---|---|
-| Assignment ID | Your assignment in SuccessFactors. Required — without it nothing is booked. Visible in the payload of any clock-in request the web UI sends. |
-| Home Assistant address | e.g. `https://ha.example.com`. Optional; without it the week view proposes default times. |
-| Long-lived access token | Home Assistant → Profile → Security → *Long-lived access tokens*. Stored locally only. |
-| Person entity | e.g. `person.max` — the entity whose zone history is evaluated. |
-| Zone without a code | A zone name that should count as work even though it carries no code, e.g. a legacy `Work` zone. |
-| Place of work for zones without a code | Fallback used together with the setting above. |
-| Default type of arrival | Used when Home Assistant has no data. |
+| Assignment ID | Your assignment in SuccessFactors. Without it nothing is booked. It appears in the payload of every clock-in request the web UI sends — open the network tab once, or ask your HR system administrator. |
 
-When you save an address, the browser asks for permission to access it — the extension ships without a host permission for Home Assistant.
+### Optional
+
+| Setting | Meaning |
+|---|---|
+| Default type of arrival | Pre-selected in the *Today* tab and used by the keyboard and desktop shortcuts. |
+| Default times | Proposed when filling in a day and nothing better is known. Defaults to 08:00 / 16:45. |
+
+### Home Assistant (only when the switch is on)
+
+Turning the switch on makes these fields mandatory; the extension refuses to save an incomplete configuration.
+
+| Setting | Meaning |
+|---|---|
+| Address | e.g. `https://ha.example.com`. Saving it asks for browser permission for that host — the extension ships without one. |
+| Long-lived access token | Home Assistant → Profile → Security → *Long-lived access tokens*. Stored locally only, never sent anywhere else. |
+| Person entity | e.g. `person.max` — the entity whose zone history is evaluated. |
+| Zone without a code | Optional. A zone name that should count as work although it carries no code, e.g. a legacy `Work` zone. |
+| Place of work for zones without a code | Optional. Used together with the setting above. |
+
+Additional requirements when the switch is on:
+
+- **Zones named with the place-of-work code** (see below), otherwise arrival times are recognised but the place of work is not
+- **A person entity with location history** — the `recorder` retention decides how far back days can be filled in; the default of roughly ten days does not cover the previous week
+- **Reachability from the browser** — a Home Assistant behind mutual TLS only answers once the client certificate has been presented, which a background request cannot ask for; visiting the address in a tab once per browser session is enough, or set `AutoSelectCertificateForUrls` for that host
 
 ### Zone naming
 
-The extension derives the place of work from the **zone name**, expecting the SuccessFactors code in parentheses at the end:
+With Home Assistant enabled, the extension derives the place of work from the **zone name**, expecting the SuccessFactors code in parentheses at the end:
 
 ```
 Büro Musterstadt (XXX_Office_Musterstadt)
 Homeoffice (XXX_A_Homeoffice)
 ```
 
-The codes are the `externalCode` values of your `cust_PlaceOfWork` picklist. Add a zone in that form and it works immediately — there is no location list in the code. Several zones may share a code, which is useful when a city has more than one office.
+`XXX_Office_Musterstadt` is a placeholder — use the `externalCode` values of your own `cust_PlaceOfWork` picklist. The extension lists them in the place-of-work dropdown, so you can read them off there. Add a zone in that form and it works immediately; there is no location list in the code. Several zones may share a code, which is useful when a city has more than one office.
+
+SuccessFactors provides codes and labels but **no coordinates**, so zones cannot be created automatically — you place them yourself in Home Assistant.
 
 ---
 
@@ -94,8 +130,8 @@ Two details worth knowing:
 
 ## Limitations
 
-- **Home Assistant history retention** governs how far back days can be filled in. The default keeps roughly ten days; for the previous week to be usable, raise `recorder: purge_keep_days` accordingly.
 - **Approved weeks** may reject new events. The error message from SuccessFactors is shown as-is.
+- **Home Assistant history retention** governs how far back days can be filled in — only relevant when the integration is on. The default keeps roughly ten days; for the previous week to be usable, raise `recorder: purge_keep_days` accordingly.
 - **Deleting time events** is not possible through the API (`405`); use the web UI.
 - Zone accuracy depends on your GPS radius. Radii below roughly 100 m tend to produce spurious exits during the day.
 

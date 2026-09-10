@@ -452,9 +452,11 @@ function renderWeek(week) {
   }
 
   $("book-all").hidden = openCount === 0;
-  $("week-hint").textContent = week.haOk === false && openCount
-    ? week.haMsg + " — es werden Standardzeiten vorgeschlagen."
-    : "";
+  // Nur melden, wenn die Anbindung aktiv ist und trotzdem nichts liefert.
+  $("week-hint").textContent =
+    week.haOk === false && !week.haOff && week.haMsg && openCount
+      ? week.haMsg + " — es werden Standardzeiten vorgeschlagen."
+      : "";
   fitWindow();
 }
 
@@ -483,12 +485,24 @@ $("book-all").addEventListener("click", () => {
 
 // ----------------------------------------------------------- Einstellungen
 
-const SETTING_IDS = ["haUrl", "haToken", "haEntity", "haZone", "assignmentId"];
+const SETTING_IDS = [
+  "assignmentId", "fallbackIn", "fallbackOut",
+  "haUrl", "haToken", "haEntity", "haZone"
+];
+
+function syncHaFields() {
+  $("ha-fields").hidden = !$("haEnabled").checked;
+  fitWindow();
+}
+
+$("haEnabled").addEventListener("change", syncHaFields);
 
 function loadSettings() {
   chrome.runtime.sendMessage({ action: "get-settings" }, (cfg) => {
     if (!cfg) return;
     for (const id of SETTING_IDS) $(id).value = cfg[id] || "";
+    $("haEnabled").checked = Boolean(cfg.haEnabled);
+    syncHaFields();
     fallback = { in: cfg.fallbackIn || "08:00", out: cfg.fallbackOut || "16:45" };
     fallbackType = cfg.startType || (startTypes[0] && startTypes[0].code) || "";
     fillTypeSelect($("startType"), fallbackType);
@@ -517,9 +531,15 @@ $("save-settings").addEventListener("click", async () => {
   for (const id of SETTING_IDS) values[id] = $(id).value.trim();
   if ($("defaultStartType").value) values.startType = $("defaultStartType").value;
   values.legacyPlaceId = $("legacyPlaceId").value || "";
+  values.haEnabled = $("haEnabled").checked;
+
+  if (values.haEnabled && (!values.haUrl || !values.haToken)) {
+    renderStatus({ phase: "error", message: "Für Home Assistant fehlen Adresse oder Token" });
+    return;
+  }
 
   // Zugriff auf die Home-Assistant-Adresse muss der Nutzer ausdrücklich erlauben.
-  if (values.haUrl) {
+  if (values.haEnabled && values.haUrl) {
     try {
       const origin = new URL(values.haUrl).origin + "/*";
       const granted = await chrome.permissions.request({ origins: [origin] });

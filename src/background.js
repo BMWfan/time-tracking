@@ -14,6 +14,9 @@ const DEFAULTS = {
   // Personalnummer der Zuordnung; ohne sie kann nicht gebucht werden.
   assignmentId: "",
   startType: "",
+  // Die Home-Assistant-Anbindung ist optional und standardmäßig aus. Ohne sie
+  // arbeitet die Erweiterung mit Standardzeiten, die von Hand angepasst werden.
+  haEnabled: false,
   haUrl: "",
   haToken: "",
   haEntity: "",
@@ -472,7 +475,10 @@ function placeOfWorkFrom(zoneName) {
 
 // Erste Ankunft und letztes Verlassen einer Arbeitszone je Tag.
 async function haTimes(cfg, startIso, endIso) {
-  if (!cfg.haUrl || !cfg.haToken) return { ok: false, msg: "Home Assistant nicht eingerichtet" };
+  if (!cfg.haEnabled) return { ok: false, off: true };
+  if (!cfg.haUrl || !cfg.haToken) {
+    return { ok: false, msg: "Home Assistant ist aktiviert, aber Adresse oder Token fehlen" };
+  }
 
   const base = cfg.haUrl.replace(/\/+$/, "");
   const start = new Date(startIso + "T00:00:00");
@@ -708,6 +714,7 @@ async function loadWeek(anyDateInWeek, waitForValuation = false) {
     // Vorschlagswerte für Tage ohne Buchung.
     const ha = await haTimes(cfg, isoDate(monday), isoDate(sunday));
     week.haOk = ha.ok;
+    week.haOff = Boolean(ha.off);
     week.haMsg = ha.msg || null;
     const today = isoDate(new Date());
     for (const day of week.days) {
