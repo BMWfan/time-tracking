@@ -74,12 +74,14 @@ Everything tenant- and person-specific lives in the extension's **Settings** tab
 
 | Setting | Meaning |
 |---|---|
+| SuccessFactors address | The host of your instance, e.g. `performancemanager.successfactors.eu` or `performancemanager4.successfactors.com`. The dropdown offers whatever SuccessFactors hosts are currently open in tabs, so in practice you just pick yours; free entry is available too. |
 | Assignment ID | Your assignment in SuccessFactors. Without it nothing is booked. It appears in the payload of every clock-in request the web UI sends — open the network tab once, or ask your HR system administrator. |
 
 ### Optional
 
 | Setting | Meaning |
 |---|---|
+| Name and icon | Shown in the panel and on the toolbar. `**bold**` sets part of the name bold, `|` adds a separator after which the rest appears smaller and grey. The icon takes a PNG, JPEG or WebP file, scaled to 128 × 128. Both live in browser storage, so an update never overwrites them. |
 | Default type of arrival | Pre-selected in the *Today* tab and used by the keyboard and desktop shortcuts. |
 | Default times | Proposed when filling in a day and nothing better is known. Defaults to 08:00 / 16:45. |
 

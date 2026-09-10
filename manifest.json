@@ -13,6 +13,7 @@
   ],
   "host_permissions": [
     "https://*.successfactors.eu/*",
+    "https://*.successfactors.com/*",
     "https://api.github.com/*"
   ],
   "background": {

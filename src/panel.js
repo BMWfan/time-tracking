@@ -490,6 +490,47 @@ const SETTING_IDS = [
   "haUrl", "haToken", "haEntity", "haZone"
 ];
 
+const OTHER_HOST = "__other__";
+
+// Auswahl der Instanz: gefundene Adressen aus offenen Tabs, der gespeicherte
+// Wert und ein Eintrag für freie Eingabe.
+function fillHostSelect(hosts, selected) {
+  const select = $("sfHost");
+  select.textContent = "";
+
+  const known = [...new Set([...hosts, selected].filter(Boolean))].sort();
+  for (const host of known) {
+    const opt = document.createElement("option");
+    opt.value = host;
+    opt.textContent = host;
+    if (host === selected) opt.selected = true;
+    select.append(opt);
+  }
+
+  const other = document.createElement("option");
+  other.value = OTHER_HOST;
+  other.textContent = "Andere Adresse eingeben …";
+  if (!known.length) other.selected = true;
+  select.append(other);
+
+  syncHostField();
+}
+
+function syncHostField() {
+  const custom = $("sfHost").value === OTHER_HOST;
+  $("sfHostCustom").hidden = !custom;
+  if (custom) $("sfHostCustom").focus();
+  fitWindow();
+}
+
+function chosenHost() {
+  const value = $("sfHost").value;
+  if (value !== OTHER_HOST) return value;
+  return $("sfHostCustom").value.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
+
+$("sfHost").addEventListener("change", syncHostField);
+
 function syncHaFields() {
   $("ha-fields").hidden = !$("haEnabled").checked;
   fitWindow();
@@ -505,6 +546,9 @@ function loadSettings() {
     syncHaFields();
     brandIcon = cfg.brandIcon || "";
     renderBrand(cfg.brandName, brandIcon);
+    chrome.runtime.sendMessage({ action: "sf-hosts" }, (res) =>
+      fillHostSelect((res && res.hosts) || [], cfg.sfHost)
+    );
     fallback = { in: cfg.fallbackIn || "08:00", out: cfg.fallbackOut || "16:45" };
     fallbackType = cfg.startType || (startTypes[0] && startTypes[0].code) || "";
     fillTypeSelect($("startType"), fallbackType);
@@ -535,6 +579,13 @@ $("save-settings").addEventListener("click", async () => {
   values.legacyPlaceId = $("legacyPlaceId").value || "";
   values.haEnabled = $("haEnabled").checked;
   values.brandIcon = brandIcon;
+
+  const host = chosenHost();
+  if (!host || !/successfactors\.(eu|com)$/i.test(host)) {
+    renderStatus({ phase: "error", message: "SuccessFactors-Adresse fehlt oder passt nicht" });
+    return;
+  }
+  values.sfHost = host;
 
   if (values.haEnabled && (!values.haUrl || !values.haToken)) {
     renderStatus({ phase: "error", message: "Für Home Assistant fehlen Adresse oder Token" });

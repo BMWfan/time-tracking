@@ -1,5 +1,8 @@
-const SF_GLOB = "https://*.successfactors.eu/*";
-const SF_HOME = "https://performancemanager.successfactors.eu/sf/start";
+// Die Instanz haengt am Rechenzentrum des Mandanten - DC1 heisst
+// performancemanager.successfactors.eu, andere tragen eine Ziffer oder liegen
+// auf .com. Deshalb ist der Host eine Einstellung; hier steht nur der
+// haeufigste Standard.
+const SF_GLOBS = ["https://*.successfactors.eu/*", "https://*.successfactors.com/*"];
 // Der stille SSO-Durchlauf dauert Sekunden. Muss der Nutzer selbst anmelden,
 // darf das dauern - deshalb der grosszuegige Rahmen statt eines Abbruchs.
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
@@ -16,6 +19,7 @@ const DEFAULTS = {
   // erhalten, während die Erweiterung selbst neutral ausgeliefert wird.
   brandName: "Time Tracking",
   brandIcon: "",
+  sfHost: "performancemanager.successfactors.eu",
   // Personalnummer der Zuordnung; ohne sie kann nicht gebucht werden.
   assignmentId: "",
   startType: "",
@@ -120,7 +124,7 @@ chrome.runtime.onStartup.addListener(applyBrandIcon);
 
 function isSfUrl(url) {
   try {
-    return /(^|\.)successfactors\.eu$/.test(new URL(url).hostname);
+    return /(^|\.)successfactors\.(eu|com)$/.test(new URL(url).hostname);
   } catch {
     return false;
   }
@@ -181,13 +185,15 @@ function waitForSfTab(tabId) {
 // Liefert einen nutzbaren SuccessFactors-Tab. Existiert keiner, wird einer im Hintergrund
 // geöffnet und als temporär markiert, damit er hinterher wieder verschwindet.
 async function acquireSfTab() {
-  const tabs = await chrome.tabs.query({ url: SF_GLOB });
+  const cfg = await settings();
+  const tabs = await chrome.tabs.query({ url: SF_GLOBS });
   const ready = tabs.find(
     (t) => t.status === "complete" && isSfUrl(t.url || "") && !isLoginUrl(t.url || "")
   );
   if (ready) return { tabId: ready.id, temporary: false };
 
-  const created = await chrome.tabs.create({ url: SF_HOME, active: false });
+  const home = "https://" + cfg.sfHost.replace(/^https?:\/\//, "").replace(/\/+$/, "") + "/sf/start";
+  const created = await chrome.tabs.create({ url: home, active: false });
   const { neededLogin } = await waitForSfTab(created.id);
   // Musste sich der Nutzer anmelden, bleibt der Tab stehen — ihn wegzureißen
   // wäre nach der Interaktion irritierend.
@@ -911,6 +917,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.action === "types") {
     loadTypes().then(({ start, end }) => sendResponse({ ok: true, types: start, endType: end }));
+    return true;
+  }
+  if (msg.action === "sf-hosts") {
+    // Die eigene Instanz steht in den offenen Tabs — verlässlicher als eine
+    // gepflegte Liste der SAP-Rechenzentren.
+    chrome.tabs.query({ url: SF_GLOBS }).then((tabs) => {
+      const hosts = new Set();
+      for (const tab of tabs) {
+        try {
+          hosts.add(new URL(tab.url).hostname);
+        } catch {}
+      }
+      sendResponse({ ok: true, hosts: [...hosts].sort() });
+    });
     return true;
   }
   if (msg.action === "brand-changed") {
