@@ -8,6 +8,7 @@ const auto = new URLSearchParams(location.search).get("auto");
 let currentMonday = null;
 let weekData = null;
 let startTypes = [];
+let typeReason = null;
 let endType = null;
 let places = [];
 
@@ -182,9 +183,19 @@ function loadWeek(anyDate, wait = false) {
   chrome.runtime.sendMessage({ action: "week", date: isoDate(new Date(target)), wait }, applyWeek);
 }
 
-// Füllt ein <select> mit den für den Nutzer zulässigen Kommen-Typen.
+// Füllt ein <select> mit den für den Nutzer zulässigen Kommen-Typen. Ist die
+// Liste leer, steht der Grund im Menü — ein leeres Menü erklärt sich nicht.
 function fillTypeSelect(select, selected) {
   select.textContent = "";
+  if (!startTypes.length) {
+    const hint = document.createElement("option");
+    hint.value = "";
+    hint.disabled = true;
+    hint.selected = true;
+    hint.textContent = "— " + (typeReason || "keine Typen abrufbar") + " —";
+    select.append(hint);
+    return;
+  }
   for (const t of startTypes) {
     const opt = document.createElement("option");
     opt.value = t.code;
@@ -560,6 +571,7 @@ function loadSettings() {
 function loadTypes() {
   chrome.runtime.sendMessage({ action: "types" }, (res) => {
     startTypes = (res && res.types) || [];
+    typeReason = (res && res.reason) || null;
     endType = (res && res.endType) || null;
     for (const t of startTypes) LABELS[t.code] = t.name;
     if (endType) LABELS[endType] = "Ende";

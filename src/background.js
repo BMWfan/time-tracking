@@ -615,17 +615,22 @@ let typeCache = null;
 async function loadTypes() {
   if (typeCache) return typeCache;
   const cfg = await settings();
-  if (!cfg.assignmentId) return { start: [], end: null };
+  if (!cfg.assignmentId) {
+    return { start: [], end: null, reason: "Assignment-ID fehlt — in den Einstellungen hinterlegen" };
+  }
   try {
     const res = await runInSf(pageTypes, [cfg.assignmentId]);
-    const all = (res && res.ok && res.types) || [];
+    if (!res || !res.ok) {
+      return { start: [], end: null, reason: (res && res.msg) || "Typen nicht abrufbar" };
+    }
+    const all = res.types || [];
     const end = all.find((t) => END_PATTERN.test(t.code) || END_PATTERN.test(t.name));
     typeCache = {
       start: all.filter((t) => t !== end),
       end: end ? end.code : null
     };
-  } catch {
-    return { start: [], end: null };
+  } catch (err) {
+    return { start: [], end: null, reason: String(err.message || err) };
   }
   return typeCache;
 }
@@ -919,7 +924,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.action === "types") {
-    loadTypes().then(({ start, end }) => sendResponse({ ok: true, types: start, endType: end }));
+    loadTypes().then(({ start, end, reason }) =>
+      sendResponse({ ok: true, types: start, endType: end, reason: reason || null })
+    );
     return true;
   }
   if (msg.action === "sf-hosts") {
