@@ -7,6 +7,7 @@ const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 const auto = new URLSearchParams(location.search).get("auto");
 let currentMonday = null;
 let weekData = null;
+let weekLoadedAt = 0;
 let startTypes = [];
 let typeReason = null;
 let endType = null;
@@ -72,7 +73,11 @@ function showView(name) {
     $("view-" + v).hidden = v !== name;
     $("tab-" + v).setAttribute("aria-selected", String(v === name));
   }
-  if (name === "week" && !weekData) loadWeek(currentMonday || new Date());
+  // Nach einer Buchung ist der zwischengespeicherte Stand überholt, also nicht
+  // nur bei fehlenden Daten neu laden, sondern auch wenn sie alt sind.
+  if (name === "week" && (!weekData || Date.now() - weekLoadedAt > 8000)) {
+    loadWeek(currentMonday || new Date());
+  }
   if (name === "settings") loadSettings();
   fitWindow();
 }
@@ -188,6 +193,7 @@ function renderToday(day) {
 
 function applyWeek(week, { renderTodayToo = true } = {}) {
   weekData = week;
+  weekLoadedAt = Date.now();
   if (week && week.ok) {
     currentMonday = new Date(week.monday + "T00:00:00");
     if (renderTodayToo) {
@@ -261,14 +267,18 @@ function fillPlaceSelect(select, selectedId) {
 function book(kind) {
   const type = kind === "in" ? $("startType").value || null : null;
   const placeId = kind === "out" ? $("placeOfWork").value || null : null;
-  ask({ action: "book", kind, type, placeId, time: $("time").value || null }, (res) => {
-    if (!res || !res.ok) return;
-    // Beim Ausstempeln liegt die bewertete Woche schon bei; sonst nachladen.
-    if (res.week) applyWeek(res.week);
-    else loadWeek(new Date());
-    // Nach dem Ausstempeln bleibt das Fenster stehen, damit die Tagessumme lesbar ist.
-    if (auto && kind !== "out") setTimeout(() => window.close(), 2500);
-  });
+  ask(
+    { action: "book", kind, type, placeId, time: $("time").value || null },
+    (res) => {
+      // Auch nach einem Fehlschlag neu laden: die Buchung kann durchgelaufen
+      // sein, während die Antwort ausblieb.
+      if (res && res.ok && res.week) applyWeek(res.week);
+      else loadWeek(new Date(), kind === "out");
+      if (res && res.ok && auto && kind !== "out") setTimeout(() => window.close(), 2500);
+    },
+    // Ausstempeln zieht Bewertung und Tätigkeitsstätte hinter sich her.
+    kind === "out" ? 75000 : 30000
+  );
 }
 
 $("in").addEventListener("click", () => book("in"));
