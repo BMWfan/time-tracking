@@ -1,0 +1,824 @@
+const SF_GLOB = "https://*.successfactors.eu/*";
+const SF_HOME = "https://performancemanager.successfactors.eu/sf/start";
+// Der stille SSO-Durchlauf dauert Sekunden. Muss der Nutzer selbst anmelden,
+// darf das dauern - deshalb der grosszuegige Rahmen statt eines Abbruchs.
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
+// Zeitereignistypen sind je Mandant konfiguriert. Sie werden zur Laufzeit aus
+// SuccessFactors gelesen; im Code steht keine Liste. Erkannt wird lediglich,
+// welcher Typ das Gehen ist und welcher Homeoffice bedeutet.
+const END_PATTERN = /(^|_)end$|^ende$/i;
+const HOMEOFFICE_PATTERN = /home.?office/i;
+
+const DEFAULTS = {
+  // Personalnummer der Zuordnung; ohne sie kann nicht gebucht werden.
+  assignmentId: "",
+  startType: "",
+  haUrl: "",
+  haToken: "",
+  haEntity: "",
+  // Zonenname ohne Code im Namen, der trotzdem als Arbeitszone gelten soll.
+  haZone: "",
+  // Tätigkeitsstätte für Arbeitszonen, deren Name keinen Code trägt.
+  legacyPlaceId: "",
+  fallbackIn: "08:00",
+  fallbackOut: "16:45"
+};
+
+async function settings() {
+  const stored = await chrome.storage.local.get(DEFAULTS);
+  return { ...DEFAULTS, ...stored };
+}
+
+// ------------------------------------------------------------------ Datum
+
+const pad = (n) => String(n).padStart(2, "0");
+
+function isoDate(d) {
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
+function mondayOf(dateLike) {
+  const d = new Date(dateLike);
+  d.setHours(0, 0, 0, 0);
+  const shift = (d.getDay() + 6) % 7; // Montag = 0
+  d.setDate(d.getDate() - shift);
+  return d;
+}
+
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function formatHm(minutes) {
+  const m = Math.max(0, Math.round(minutes));
+  return Math.floor(m / 60) + ":" + pad(m % 60);
+}
+
+// ---------------------------------------------------------------- Zustand
+
+// Phasen: idle | working | awaiting-login | ok | error
+let state = { phase: "idle", message: "", loginTabId: null, updatedAt: Date.now() };
+
+function setState(phase, message, extra = {}) {
+  state = { phase, message, loginTabId: null, ...extra, updatedAt: Date.now() };
+  // Schlägt fehl, wenn kein Panel offen ist - das ist der Normalfall.
+  chrome.runtime.sendMessage({ action: "state", state }).catch(() => {});
+}
+
+function notify(title, message) {
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: "icons/128.png",
+    title,
+    message,
+    priority: 1
+  });
+}
+
+// ------------------------------------------------------------------- Tabs
+
+function isSfUrl(url) {
+  try {
+    return /(^|\.)successfactors\.eu$/.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+// Anmeldeseiten: der SSO-Umweg über Microsoft und SuccessFactors' eigene Loginmaske.
+function isLoginUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!isSfUrl(url)) return true;
+    return /^\/(login|sso|saml)/i.test(u.pathname);
+  } catch {
+    return true;
+  }
+}
+
+function waitForSfTab(tabId) {
+  return new Promise((resolve, reject) => {
+    let announced = false;
+    const timer = setTimeout(() => {
+      finish();
+      reject(new Error("Zeitüberschreitung: keine Anmeldung innerhalb von 5 Minuten"));
+    }, LOGIN_TIMEOUT_MS);
+
+    function finish() {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+    }
+    function onUpdated(id, info, tab) {
+      if (id !== tabId || info.status !== "complete") return;
+
+      if (isLoginUrl(tab.url || "")) {
+        if (!announced) {
+          announced = true;
+          setState("awaiting-login", "Anmeldung nötig — warte auf Login …", { loginTabId: tabId });
+          notify(
+            "Peoplehub — Anmeldung nötig",
+            "Die Sitzung ist abgelaufen. Im geöffneten Tab anmelden — danach wird automatisch weitergemacht."
+          );
+        }
+        return;
+      }
+
+      finish();
+      resolve({ neededLogin: announced });
+    }
+    function onRemoved(id) {
+      if (id !== tabId) return;
+      finish();
+      reject(new Error("Tab wurde geschlossen, bevor die Buchung lief"));
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onRemoved.addListener(onRemoved);
+  });
+}
+
+// Liefert einen nutzbaren Peoplehub-Tab. Existiert keiner, wird einer im Hintergrund
+// geöffnet und als temporär markiert, damit er hinterher wieder verschwindet.
+async function acquireSfTab() {
+  const tabs = await chrome.tabs.query({ url: SF_GLOB });
+  const ready = tabs.find(
+    (t) => t.status === "complete" && isSfUrl(t.url || "") && !isLoginUrl(t.url || "")
+  );
+  if (ready) return { tabId: ready.id, temporary: false };
+
+  const created = await chrome.tabs.create({ url: SF_HOME, active: false });
+  const { neededLogin } = await waitForSfTab(created.id);
+  // Musste sich der Nutzer anmelden, bleibt der Tab stehen — ihn wegzureißen
+  // wäre nach der Interaktion irritierend.
+  return { tabId: created.id, temporary: !neededLogin };
+}
+
+async function runInSf(func, args) {
+  const { tabId, temporary } = await acquireSfTab();
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func,
+      args
+    });
+    if (temporary) chrome.tabs.remove(tabId).catch(() => {});
+    return result;
+  } catch (err) {
+    if (temporary) chrome.tabs.remove(tabId).catch(() => {});
+    throw err;
+  }
+}
+
+// ------------------------------------------- Code im Seitenkontext (MAIN)
+// Läuft im MAIN world der Seite: gleiche Origin, echte Session-Cookies, kein CORS.
+
+// Bucht beliebig viele Zeitereignisse; ein CSRF-Token für alle.
+function pageBook(assignmentId, entries) {
+  return (async () => {
+    const base = "/odatav4/timemanagement/timeeventprocessing/ManageClockInClockOut.svc/v2/";
+    const p = (n) => String(n).padStart(2, "0");
+
+    try {
+      const probe = await fetch(base, {
+        credentials: "include",
+        headers: { "X-CSRF-Token": "Fetch", Accept: "application/json" }
+      });
+      const token = probe.headers.get("x-csrf-token");
+      if (!token) return { ok: false, msg: "Keine gültige Peoplehub-Sitzung", needsLogin: true };
+
+      const results = [];
+      for (const entry of entries) {
+        const m = String(entry.time).match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) {
+          results.push({ ...entry, ok: false, msg: "Ungültige Uhrzeit" });
+          continue;
+        }
+        // Offset für genau diesen Tag berechnen, damit Sommer-/Winterzeit stimmt.
+        const when = new Date(entry.date + "T00:00:00");
+        when.setHours(Number(m[1]), Number(m[2]), 0, 0);
+        const stamp = entry.date + "T" + p(when.getHours()) + ":" + p(when.getMinutes()) + ":00Z";
+        const offset = -when.getTimezoneOffset();
+        const abs = Math.abs(offset);
+        const tz = (offset >= 0 ? "+" : "-") + p(Math.floor(abs / 60)) + ":" + p(abs % 60);
+
+        const res = await fetch(base + "TimeEvents", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "OData-Version": "4.0",
+            "OData-MaxVersion": "4.0",
+            "Accept-Language": "de-DE",
+            "X-CSRF-Token": token
+          },
+          body: JSON.stringify({
+            assignmentId,
+            creationSource: "MANUAL",
+            timestampLocal: stamp,
+            timeZoneOffset: tz,
+            timeEventTypeCode: entry.type,
+            geoFenceCode: null
+          })
+        });
+
+        if (res.status === 201) {
+          results.push({ ...entry, ok: true });
+        } else if (res.status === 401 || res.status === 403) {
+          return { ok: false, msg: "Sitzung abgelaufen", needsLogin: true };
+        } else {
+          const raw = await res.text();
+          let detail = raw;
+          try {
+            const parsed = JSON.parse(raw);
+            detail = (parsed.error && parsed.error.message) || raw;
+          } catch {}
+          results.push({ ...entry, ok: false, msg: String(detail).slice(0, 200) });
+        }
+      }
+
+      const failed = results.filter((r) => !r.ok);
+      return { ok: failed.length === 0, results, msg: failed.length ? failed[0].msg : "" };
+    } catch (err) {
+      return { ok: false, msg: "Netzwerkfehler: " + String(err) };
+    }
+  })();
+}
+
+// Die für diesen Nutzer aktuell erlaubten Zeitereignistypen.
+function pageTypes(assignmentId) {
+  return (async () => {
+    const base = "/odatav4/timemanagement/timeeventprocessing/ManageClockInClockOut.svc/v2/";
+    const p = (n) => String(n).padStart(2, "0");
+    const now = new Date();
+    const offset = -now.getTimezoneOffset();
+    const abs = Math.abs(offset);
+    const tz = (offset >= 0 ? "+" : "-") + p(Math.floor(abs / 60)) + ":" + p(abs % 60);
+    const dt =
+      now.getFullYear() + "-" + p(now.getMonth() + 1) + "-" + p(now.getDate()) +
+      "T" + p(now.getHours()) + ":" + p(now.getMinutes()) + ":00" + tz;
+    try {
+      const res = await fetch(
+        base + "TimeEventTypes/getActiveTimeEventTypesForUserAndDateTime(assignmentId='" +
+          assignmentId + "',dateTime=" + dt + ")",
+        { credentials: "include", headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) return { ok: false, msg: "Fehler " + res.status };
+      const data = await res.json();
+      return {
+        ok: true,
+        types: (data.value || [])
+          .map((t) => ({ code: t.externalCode, name: t.name }))
+          .filter((t) => t.code)
+      };
+    } catch (err) {
+      return { ok: false, msg: String(err) };
+    }
+  })();
+}
+
+// Liest Zeitereignisse und die von SuccessFactors bewertete Tagesarbeitszeit
+// für die Woche ab mondayIso.
+function pageWeek(assignmentId, mondayIso, sundayIso, waitForValuation) {
+  return (async () => {
+    const cico = "/odatav4/timemanagement/timeeventprocessing/ManageClockInClockOut.svc/v2/";
+    const att = "/odatav4/timemanagement/attendance/AttendanceRecordingUi.svc/v2/";
+    const json = async (url) => {
+      const res = await fetch(url, { credentials: "include", headers: { Accept: "application/json" } });
+      if (!res.ok) {
+        const e = new Error("Fehler " + res.status);
+        e.status = res.status;
+        throw e;
+      }
+      return res.json();
+    };
+
+    try {
+      const filter =
+        "assignmentId eq '" + assignmentId + "' and timestampLocal ge " + mondayIso +
+        "T00:00:00Z and timestampLocal le " + sundayIso + "T23:59:59Z";
+      const evData = await json(
+        cico + "TimeEvents?$select=timestampLocal,timeEventTypeCode,creationSource&$orderby=timestampLocal&$top=200&$filter=" +
+          encodeURIComponent(filter)
+      );
+
+      const byDate = {};
+      for (const e of evData.value || []) {
+        const stamp = String(e.timestampLocal);
+        const date = stamp.slice(0, 10);
+        (byDate[date] = byDate[date] || []).push({
+          time: stamp.slice(11, 16),
+          type: e.timeEventTypeCode,
+          source: e.creationSource
+        });
+      }
+
+      // Bewertung läuft nach einer Buchung asynchron nach.
+      let sheet = null;
+      const attempts = waitForValuation ? 6 : 1;
+      for (let i = 0; i < attempts; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 1500));
+        if (waitForValuation) {
+          try {
+            const fin = await json(att + "isTimeValuationFinished(assignmentId='" + assignmentId + "')");
+            if (fin && fin.value === false) continue;
+          } catch {}
+        }
+        sheet = await json(
+          att + "TimeSheetSummary(assignmentId='" + assignmentId + "',shiftDate=" + mondayIso +
+            ")?$expand=days($expand=attendances)"
+        );
+        break;
+      }
+
+      const days = (sheet && sheet.days ? sheet.days : []).map((d) => {
+        const events = byDate[d.shiftDate] || [];
+        const summary = d.summary || {};
+        const toMin = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+        const span =
+          events.length >= 2 ? toMin(events[events.length - 1].time) - toMin(events[0].time) : null;
+        // Pausen legt das System selbst an; die Tätigkeitsstätte hängt an den
+        // Arbeitszeitsätzen.
+        const work = (d.attendances || []).filter((a) => a.origin !== "SYSTEM_GENERATED");
+        return {
+          placeId: (work.find((a) => a.cust_PlaceOfWork) || {}).cust_PlaceOfWork || null,
+          hasAttendance: work.length > 0,
+          date: d.shiftDate,
+          isWorkingDay: d.isWorkingDay,
+          isMaintainable: d.isMaintainable,
+          holiday: d.holiday || "",
+          events,
+          absences: summary.absences || 0,
+          recordedMinutes: summary.recordedWorkingTimeInMinutes ?? null,
+          plannedMinutes: summary.plannedWorkingTimeInMinutes ?? null,
+          dayModel: summary.dayModelExternalName || null,
+          spanMinutes: span
+        };
+      });
+
+      return {
+        ok: true,
+        monday: mondayIso,
+        approvalStatus: (sheet && sheet.approvalStatusText) || null,
+        weekPlanned: (sheet && sheet.plannedWorkingTimeHoursAndMinutes) || null,
+        weekRecorded: (sheet && sheet.recordedWorkingTimeHoursAndMinutes) || null,
+        days
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        msg: err.status ? "Fehler " + err.status : "Netzwerkfehler: " + String(err),
+        needsLogin: err.status === 401 || err.status === 403
+      };
+    }
+  })();
+}
+
+// Auswahlliste der Tätigkeitsstätten. Geschrieben wird die internalId als
+// Zeichenkette — der externe Code wird beim Speichern abgelehnt.
+function pagePlaces() {
+  return (async () => {
+    const att = "/odatav4/timemanagement/attendance/AttendanceRecordingUi.svc/v2/";
+    try {
+      const res = await fetch(att + "VH_cust_PlaceOfWork_OF_EmployeeTimeSheetEntry?$top=200", {
+        credentials: "include",
+        headers: { Accept: "application/json" }
+      });
+      if (!res.ok) return { ok: false, msg: "Fehler " + res.status };
+      const data = await res.json();
+      return {
+        ok: true,
+        places: (data.value || [])
+          .filter((p) => p.internalId != null)
+          .map((p) => ({ id: String(p.internalId), code: p.externalCode, label: p.label }))
+      };
+    } catch (err) {
+      return { ok: false, msg: String(err) };
+    }
+  })();
+}
+
+// Setzt die Tätigkeitsstätte an allen Arbeitszeitsätzen eines Tages.
+function pageSetPlace(assignmentId, dateIso, placeId) {
+  return (async () => {
+    const att = "/odatav4/timemanagement/attendance/AttendanceRecordingUi.svc/v2/";
+    const key = "assignmentId='" + assignmentId + "',shiftDate=" + dateIso;
+    try {
+      const sheet = await (
+        await fetch(att + "TimeSheetSummary(" + key + ")?$expand=days($expand=attendances)", {
+          credentials: "include",
+          headers: { Accept: "application/json" }
+        })
+      ).json();
+      const day = (sheet.days || []).find((d) => d.shiftDate === dateIso);
+      const records = ((day && day.attendances) || []).filter(
+        (a) => a.origin !== "SYSTEM_GENERATED" && a.mdfSystemRecordId
+      );
+      if (!records.length) return { ok: false, msg: "Für diesen Tag gibt es noch keinen Erfassungssatz" };
+
+      const probe = await fetch(att, {
+        credentials: "include",
+        headers: { "X-CSRF-Token": "Fetch", Accept: "application/json" }
+      });
+      const token = probe.headers.get("x-csrf-token");
+      if (!token) return { ok: false, msg: "Keine gültige Peoplehub-Sitzung", needsLogin: true };
+
+      for (const rec of records) {
+        const url =
+          att + "TimeSheetSummary(" + key + ")/days(" + key + ")/attendances('" +
+          encodeURIComponent(rec.mdfSystemRecordId) + "')";
+        const res = await fetch(url, {
+          method: "PATCH",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "OData-Version": "4.0",
+            "OData-MaxVersion": "4.0",
+            "Accept-Language": "de-DE",
+            "X-CSRF-Token": token
+          },
+          body: JSON.stringify({ cust_PlaceOfWork: placeId ? String(placeId) : null })
+        });
+        if (!res.ok) {
+          const raw = await res.text();
+          let detail = raw;
+          try {
+            detail = (JSON.parse(raw).error || {}).message || raw;
+          } catch {}
+          return { ok: false, msg: String(detail).slice(0, 200) };
+        }
+      }
+      return { ok: true, count: records.length };
+    } catch (err) {
+      return { ok: false, msg: "Netzwerkfehler: " + String(err) };
+    }
+  })();
+}
+
+// -------------------------------------------------------- Home Assistant
+
+// Arbeitszonen tragen den SuccessFactors-Code der Tätigkeitsstätte in Klammern
+// am Ende ihres Namens, etwa "Büro Musterstadt (XXX_Office_Musterstadt)".
+// So braucht es keine Zuordnungstabelle im Code.
+function placeOfWorkFrom(zoneName) {
+  const m = String(zoneName || "").match(/\(([A-Z]{2,3}_[A-Za-z0-9_]+)\)\s*$/);
+  return m ? m[1] : null;
+}
+
+// Erste Ankunft und letztes Verlassen einer Arbeitszone je Tag.
+async function haTimes(cfg, startIso, endIso) {
+  if (!cfg.haUrl || !cfg.haToken) return { ok: false, msg: "Home Assistant nicht eingerichtet" };
+
+  const base = cfg.haUrl.replace(/\/+$/, "");
+  const start = new Date(startIso + "T00:00:00");
+  const end = new Date(endIso + "T23:59:59");
+  const url =
+    base + "/api/history/period/" + encodeURIComponent(start.toISOString()) +
+    "?filter_entity_id=" + encodeURIComponent(cfg.haEntity) +
+    "&end_time=" + encodeURIComponent(end.toISOString()) +
+    "&minimal_response&significant_changes_only";
+
+  try {
+    const res = await fetch(url, { headers: { Authorization: "Bearer " + cfg.haToken } });
+    if (res.status === 401) return { ok: false, msg: "Home Assistant: Token ungültig" };
+    // Steht Home Assistant hinter mTLS, antwortet der Proxy ohne vorgelegtes
+    // Client-Zertifikat mit 403. Chrome kann es hier nicht erfragen, weil kein
+    // sichtbarer Tab da ist — ein Besuch der Seite im Tab füllt den Cache.
+    if (res.status === 403) {
+      return {
+        ok: false,
+        msg: "Home Assistant: 403 — vermutlich fehlt das Client-Zertifikat. Seite einmal im Tab öffnen und Zertifikat bestätigen."
+      };
+    }
+    if (!res.ok) return { ok: false, msg: "Home Assistant: Fehler " + res.status };
+    const data = await res.json();
+    const series = (data && data[0]) || [];
+
+    // Eine Arbeitszone ist jede Zone mit Code im Namen; der alte, fest
+    // eingestellte Zonenname gilt weiter, damit bestehende Aufbauten laufen.
+    const isWork = (s) => Boolean(placeOfWorkFrom(s)) || (cfg.haZone && s === cfg.haZone);
+
+    const perDay = {};
+    let prev = null;
+    for (const point of series) {
+      const at = new Date(point.last_changed || point.last_updated);
+      const day = isoDate(at);
+      const time = pad(at.getHours()) + ":" + pad(at.getMinutes());
+      const slot = (perDay[day] = perDay[day] || { in: null, out: null, place: null, zone: null });
+
+      const nowAtWork = isWork(point.state);
+      const wasAtWork = isWork(prev);
+      if (nowAtWork && !wasAtWork && !slot.in) {
+        slot.in = time;
+        slot.zone = point.state;
+        slot.place = placeOfWorkFrom(point.state);
+      }
+      if (!nowAtWork && wasAtWork) slot.out = time;
+      prev = point.state;
+    }
+    return { ok: true, perDay };
+  } catch (err) {
+    return { ok: false, msg: "Home Assistant nicht erreichbar: " + String(err) };
+  }
+}
+
+// --------------------------------------------------------------- Ablaeufe
+
+let placeCache = null;
+
+async function loadPlaces() {
+  if (placeCache) return placeCache;
+  try {
+    const res = await runInSf(pagePlaces, []);
+    placeCache = res && res.ok ? res.places : [];
+  } catch {
+    placeCache = [];
+  }
+  return placeCache;
+}
+
+// Übersetzt den Code aus dem Zonennamen in die internalId, die das Feld erwartet.
+async function placeIdForCode(code) {
+  if (!code) return null;
+  const places = await loadPlaces();
+  const hit = places.find((p) => p.code === code);
+  return hit ? hit.id : null;
+}
+
+async function setPlace(dateIso, placeId) {
+  const cfg = await settings();
+  try {
+    return await runInSf(pageSetPlace, [cfg.assignmentId, dateIso, placeId || null]);
+  } catch (err) {
+    return { ok: false, msg: String(err.message || err) };
+  }
+}
+
+let typeCache = null;
+
+// Trennt die abgerufenen Typen in Kommen-Typen und den Gehen-Typ.
+async function loadTypes() {
+  if (typeCache) return typeCache;
+  const cfg = await settings();
+  if (!cfg.assignmentId) return { start: [], end: null };
+  try {
+    const res = await runInSf(pageTypes, [cfg.assignmentId]);
+    const all = (res && res.ok && res.types) || [];
+    const end = all.find((t) => END_PATTERN.test(t.code) || END_PATTERN.test(t.name));
+    typeCache = {
+      start: all.filter((t) => t !== end),
+      end: end ? end.code : null
+    };
+  } catch {
+    return { start: [], end: null };
+  }
+  return typeCache;
+}
+
+// Kommen-Typ für einen Tag: Büro, wenn eine Arbeitszone erkannt wurde,
+// sonst Homeoffice — jeweils anhand der Typen des Mandanten.
+async function typeForDay(cfg, wasAtOffice, atOffice) {
+  const { start } = await loadTypes();
+  const homeoffice = start.find(
+    (t) => HOMEOFFICE_PATTERN.test(t.code) || HOMEOFFICE_PATTERN.test(t.name)
+  );
+  const office =
+    start.find((t) => t.code === cfg.startType) ||
+    start.find((t) => t !== homeoffice) ||
+    start[0];
+  if (atOffice) return office ? office.code : cfg.startType;
+  if (wasAtOffice) return homeoffice ? homeoffice.code : cfg.startType;
+  return cfg.startType;
+}
+
+async function book(kind, timeStr, typeCode, placeId) {
+  const cfg = await settings();
+  const label = kind === "in" ? "Kommt" : "Geht";
+  if (!cfg.assignmentId) {
+    const msg = "Assignment-ID fehlt — bitte in den Einstellungen hinterlegen";
+    setState("error", msg);
+    return { ok: false, msg };
+  }
+  const { end } = await loadTypes();
+  const type = kind === "in" ? typeCode || cfg.startType : end;
+  if (!type) {
+    const msg = "Zeitereignistyp nicht ermittelbar — bitte Einstellungen prüfen";
+    setState("error", msg);
+    return { ok: false, msg };
+  }
+  const time = timeStr || pad(new Date().getHours()) + ":" + pad(new Date().getMinutes());
+  const date = isoDate(new Date());
+
+  setState("working", label + " wird gebucht …");
+  try {
+    const result = await runInSf(pageBook, [cfg.assignmentId, [{ date, time, type }]]);
+    if (result && result.ok) {
+      setState("ok", label + " gebucht um " + time);
+      if (kind === "out") {
+        result.week = await loadWeek(date, true);
+        const today = result.week && result.week.ok
+          ? result.week.days.find((d) => d.date === date)
+          : null;
+
+        // Tätigkeitsstätte erst jetzt setzen — der Erfassungssatz entsteht
+        // erst, wenn Kommen und Gehen gepaart sind.
+        const wanted = placeId || (today && (await placeIdForCode(today.suggestPlace)));
+        if (wanted) {
+          result.place = await setPlace(date, wanted);
+          if (result.place && result.place.ok && result.week && result.week.ok) {
+            result.week = await loadWeek(date, false);
+          }
+        }
+
+        const net = today && today.recordedMinutes;
+        notify("Peoplehub — " + label, net
+          ? "Gebucht um " + time + " — heute " + formatHm(net) + " erfasst"
+          : "Gebucht um " + time);
+      } else {
+        notify("Peoplehub — " + label, "Gebucht um " + time);
+      }
+      result.time = time;
+      return result;
+    }
+    const msg = (result && result.msg) || "Unbekannter Fehler";
+    setState("error", msg);
+    notify("Peoplehub — " + label + " fehlgeschlagen", msg);
+    return result || { ok: false, msg };
+  } catch (err) {
+    const msg = String(err.message || err);
+    setState("error", msg);
+    notify("Peoplehub — " + label + " fehlgeschlagen", msg);
+    return { ok: false, msg };
+  }
+}
+
+// Trägt für einen zurückliegenden Tag Kommen und Gehen nach.
+async function bookDays(items) {
+  const cfg = await settings();
+  const { end } = await loadTypes();
+  const entries = [];
+  for (const item of items) {
+    if (item.in) entries.push({ date: item.date, time: item.in, type: item.type || cfg.startType });
+    if (item.out && end) entries.push({ date: item.date, time: item.out, type: end });
+  }
+  if (!entries.length) return { ok: false, msg: "Nichts zu buchen" };
+
+  setState("working", entries.length + " Zeitereignisse werden gebucht …");
+  try {
+    const result = await runInSf(pageBook, [cfg.assignmentId, entries]);
+    if (result && result.ok) {
+      // Nach dem Nachtragen liegen beide Stempel vor, der Erfassungssatz also auch.
+      for (const item of items) {
+        if (!item.placeId) continue;
+        setState("working", "Tätigkeitsstätte wird gesetzt …");
+        await setPlace(item.date, item.placeId);
+      }
+      const days = new Set(entries.map((e) => e.date)).size;
+      setState("ok", days === 1 ? "Tag nachgetragen" : days + " Tage nachgetragen");
+      notify("Peoplehub — Nachtrag", days === 1 ? "1 Tag nachgetragen" : days + " Tage nachgetragen");
+    } else {
+      const msg = (result && result.msg) || "Unbekannter Fehler";
+      setState("error", msg);
+      notify("Peoplehub — Nachtrag fehlgeschlagen", msg);
+    }
+    return result;
+  } catch (err) {
+    const msg = String(err.message || err);
+    setState("error", msg);
+    notify("Peoplehub — Nachtrag fehlgeschlagen", msg);
+    return { ok: false, msg };
+  }
+}
+
+async function loadWeek(anyDateInWeek, waitForValuation = false) {
+  const cfg = await settings();
+  const monday = mondayOf(anyDateInWeek || new Date());
+  const sunday = addDays(monday, 6);
+  try {
+    const week = await runInSf(pageWeek, [
+      cfg.assignmentId, isoDate(monday), isoDate(sunday), waitForValuation
+    ]);
+    if (!week || !week.ok) return week || { ok: false, msg: "Woche nicht abrufbar" };
+
+    // Vorschlagswerte für Tage ohne Buchung.
+    const ha = await haTimes(cfg, isoDate(monday), isoDate(sunday));
+    week.haOk = ha.ok;
+    week.haMsg = ha.msg || null;
+    const today = isoDate(new Date());
+    for (const day of week.days) {
+      const suggestion = (ha.ok && ha.perDay[day.date]) || {};
+      day.suggestIn = suggestion.in || null;
+      day.suggestOut = suggestion.out || null;
+      day.suggestSource = suggestion.in || suggestion.out ? "ha" : "fallback";
+      day.suggestPlace = suggestion.place || null;
+      day.suggestZone = suggestion.zone || null;
+      day.suggestPlaceId = suggestion.place
+        ? await placeIdForCode(suggestion.place)
+        : suggestion.in
+          ? cfg.legacyPlaceId || null
+          : null;
+      // War an dem Tag kein Aufenthalt in der Arbeitszone, war es vermutlich
+      // Homeoffice — sofern Home Assistant überhaupt Daten geliefert hat.
+      day.suggestType = await typeForDay(cfg, ha.ok, Boolean(suggestion.in));
+      day.isPast = day.date < today;
+      day.isToday = day.date === today;
+    }
+    return week;
+  } catch (err) {
+    return { ok: false, msg: String(err.message || err) };
+  }
+}
+
+// ------------------------------------------------------------ Panelfenster
+
+// Ein echtes Fenster statt eines Action-Popups: Popups schließen sich, sobald
+// der Fokus wechselt — genau dann, wenn man sich gerade anmelden soll.
+let panelWindowId = null;
+
+async function openPanel() {
+  if (panelWindowId != null) {
+    try {
+      await chrome.windows.update(panelWindowId, { focused: true, drawAttention: true });
+      return;
+    } catch {
+      panelWindowId = null;
+    }
+  }
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL("panel.html"),
+    type: "popup",
+    // Startmaß; das Panel misst seinen Inhalt und passt das Fenster selbst an.
+    width: 560,
+    height: 760
+  });
+  panelWindowId = win.id;
+}
+
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === panelWindowId) panelWindowId = null;
+});
+
+chrome.action.onClicked.addListener(openPanel);
+
+// -------------------------------------------------------------- Ausloeser
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "punch-in") book("in", null);
+  if (command === "punch-out") book("out", null);
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg) return false;
+
+  if (msg.action === "book") {
+    book(msg.kind, msg.time || null, msg.type || null, msg.placeId || null).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "types") {
+    loadTypes().then(({ start, end }) => sendResponse({ ok: true, types: start, endType: end }));
+    return true;
+  }
+  if (msg.action === "places") {
+    loadPlaces().then((places) => sendResponse({ ok: true, places }));
+    return true;
+  }
+  if (msg.action === "set-place") {
+    setPlace(msg.date, msg.placeId || null).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "week") {
+    loadWeek(msg.date || null, Boolean(msg.wait)).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "book-days") {
+    bookDays(msg.items || []).then(sendResponse);
+    return true;
+  }
+  if (msg.action === "get-settings") {
+    settings().then(sendResponse);
+    return true;
+  }
+  if (msg.action === "set-settings") {
+    chrome.storage.local.set(msg.values || {}).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg.action === "set-start-type") {
+    chrome.storage.local.set({ startType: msg.type }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg.action === "get-state") {
+    sendResponse(state);
+    return false;
+  }
+  if (msg.action === "focus-login" && state.loginTabId != null) {
+    chrome.tabs.update(state.loginTabId, { active: true }).catch(() => {});
+    sendResponse({ ok: true });
+    return false;
+  }
+  return false;
+});

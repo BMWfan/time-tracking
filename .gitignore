@@ -1,0 +1,10 @@
+# Signing key for the pinned extension ID — never commit
+*.pem
+
+# Packaged builds
+*.zip
+*.crx
+
+node_modules/
+.DS_Store
+Thumbs.db

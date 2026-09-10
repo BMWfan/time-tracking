@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>peoplehub · Time Tracking</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    /* An Apples Systemfarben angelehnt, Flaechen als Milchglas */
+    --bg:#E9ECF5;
+    --glass:rgba(255,255,255,.52); --glass-2:rgba(255,255,255,.34);
+    --glass-line:rgba(255,255,255,.75); --glass-edge:rgba(0,0,0,.06);
+    --glass-top:inset 0 1px 0 rgba(255,255,255,.85);
+    --fg:#0B0B0F; --muted:rgba(60,60,67,.62); --separator:rgba(60,60,67,.14);
+    --blue:#007AFF; --green:#34C759; --red:#FF3B30; --orange:#FF9500;
+    --fill:rgba(120,120,128,.14); --fill-strong:rgba(120,120,128,.22);
+    --radius:16px; --radius-sm:11px;
+    --shadow:0 1px 1px rgba(0,0,0,.03), 0 8px 24px rgba(31,38,86,.09);
+    --blur:saturate(180%) blur(22px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#08080C;
+      --glass:rgba(255,255,255,.085); --glass-2:rgba(255,255,255,.055);
+      --glass-line:rgba(255,255,255,.16); --glass-edge:rgba(0,0,0,.5);
+      --glass-top:inset 0 1px 0 rgba(255,255,255,.09);
+      --fg:#FFFFFF; --muted:rgba(235,235,245,.6); --separator:rgba(235,235,245,.12);
+      --blue:#0A84FF; --green:#30D158; --red:#FF453A; --orange:#FF9F0A;
+      --fill:rgba(120,120,128,.28); --fill-strong:rgba(120,120,128,.4);
+      --shadow:0 1px 1px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45);
+    }
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:20px 18px 24px;
+    width:420px; max-width:100%; position:relative; isolation:isolate;
+    font:15px/1.45 -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    letter-spacing:-0.01em;
+    background:var(--bg); color:var(--fg);
+    -webkit-font-smoothing:antialiased;
+  }
+  /* Farbschleier, damit das Milchglas etwas zum Durchscheinen hat */
+  body::before {
+    content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+    background:
+      radial-gradient(64% 42% at 18% -6%, rgba(0,122,255,.55), transparent 68%),
+      radial-gradient(58% 38% at 104% 8%, rgba(191,90,242,.52), transparent 70%),
+      radial-gradient(70% 44% at 88% 74%, rgba(52,199,89,.42), transparent 70%),
+      radial-gradient(66% 40% at -8% 62%, rgba(255,149,0,.36), transparent 68%),
+      radial-gradient(50% 34% at 50% 108%, rgba(255,59,48,.24), transparent 70%);
+  }
+  @media (prefers-color-scheme: dark) {
+    body::before {
+      background:
+        radial-gradient(64% 42% at 18% -6%, rgba(10,132,255,.5), transparent 68%),
+        radial-gradient(58% 38% at 104% 8%, rgba(191,90,242,.44), transparent 70%),
+        radial-gradient(70% 44% at 88% 74%, rgba(48,209,88,.3), transparent 70%),
+        radial-gradient(66% 40% at -8% 62%, rgba(255,159,10,.26), transparent 68%),
+        radial-gradient(50% 34% at 50% 108%, rgba(255,69,58,.2), transparent 70%);
+    }
+  }
+
+  /* Lockup nach Fiori-Shell-Bar-Muster: Marke, Trennstrich, App-Titel.
+     Die Wortmarke bleibt unangetastet, der Produktname steht als eigener
+     Titel daneben — nicht an die Marke antypografiert. */
+  .brand { display:flex; align-items:center; margin:0 0 18px; }
+  .brand svg { flex:0 0 auto; border-radius:6px; box-shadow:0 2px 8px rgba(242,21,87,.32); }
+  h1 { display:flex; align-items:center; margin:0; font-size:17px; line-height:1; }
+  h1 .wm {
+    margin-left:10px;                 /* Schutzraum um die Marke */
+    font-weight:400; letter-spacing:-0.032em;
+  }
+  h1 .wm b { font-weight:700; }
+  h1 .rule {
+    width:1px; height:17px; margin:0 12px;
+    background:currentColor; opacity:.22;
+  }
+  h1 .title { font-size:15px; font-weight:500; letter-spacing:-0.01em; color:var(--muted); }
+
+  /* Segmented Control als Glaspille */
+  .tabs {
+    display:flex; gap:2px; padding:3px; margin:0 0 18px;
+    background:var(--glass-2); border:.5px solid var(--glass-line);
+    border-radius:11px; box-shadow:var(--shadow);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  }
+  .tab {
+    flex:1; appearance:none; border:0; background:transparent; color:var(--fg);
+    font:inherit; font-size:13px; font-weight:500; padding:7px 4px;
+    border-radius:8px; cursor:pointer; transition:background .18s ease, box-shadow .18s ease;
+  }
+  .tab:hover:not([aria-selected="true"]) { background:var(--fill); }
+  .tab[aria-selected="true"] {
+    background:var(--glass); font-weight:600;
+    border:.5px solid var(--glass-line);
+    box-shadow:0 1px 3px rgba(0,0,0,.14);
+  }
+
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  select {
+    width:100%; padding:11px 12px; border:.5px solid var(--glass-line);
+    border-radius:var(--radius-sm); font:inherit; color:var(--fg);
+    background:var(--glass-2);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  }
+  select:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
+  .day-fields select { flex:1 1 100%; padding:8px 10px; font-size:14px; }
+  input[type=time], input[type=text], input[type=url], input[type=password] {
+    width:100%; padding:11px 12px; border:.5px solid var(--glass-line);
+    border-radius:var(--radius-sm); font:inherit; color:var(--fg);
+    background:var(--glass-2);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  }
+  input:focus-visible { outline:2px solid var(--blue); outline-offset:1px; }
+
+  .row { display:flex; gap:10px; margin-top:12px; }
+  button.primary {
+    flex:1; padding:13px 10px; border:0; border-radius:var(--radius-sm);
+    font:inherit; font-size:16px; font-weight:600; color:#fff; cursor:pointer;
+    transition:filter .15s ease, transform .06s ease, box-shadow .15s ease;
+  }
+  button.primary:active { transform:scale(.985); }
+  button.primary:hover:not(:disabled) { filter:brightness(1.07); }
+  button:disabled { opacity:.4; cursor:default; box-shadow:none; }
+  .in {
+    background:linear-gradient(180deg, #43D96B, var(--green));
+    box-shadow:0 4px 14px rgba(52,199,89,.34);
+  }
+  .out {
+    background:linear-gradient(180deg, #2C90FF, var(--blue));
+    box-shadow:0 4px 14px rgba(0,122,255,.32);
+  }
+  button.link {
+    background:none; border:0; color:var(--blue); font:inherit; font-size:13px;
+    padding:0; cursor:pointer;
+  }
+
+  /* Statuszeile */
+  #status {
+    display:flex; align-items:center; gap:9px; margin-top:16px;
+    min-height:20px; font-size:14px;
+  }
+  #status.hidden { display:none; }
+  .spinner {
+    width:15px; height:15px; flex:0 0 auto;
+    border:2px solid currentColor; border-right-color:transparent;
+    border-radius:50%; animation:spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration:2.4s; } }
+  .dot { width:15px; height:15px; flex:0 0 auto; text-align:center; line-height:15px; font-weight:700; }
+  .ok { color:var(--green); } .err { color:var(--red); } .wait { color:var(--orange); }
+
+  /* Karten und Zeilen — durchscheinendes Milchglas */
+  .card {
+    margin-top:16px; border-radius:var(--radius);
+    background:var(--glass); border:.5px solid var(--glass-line);
+    padding:4px 14px; box-shadow:var(--shadow), var(--glass-top); font-size:15px;
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  }
+  .ev { display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:10px 0; }
+  .ev + .ev { border-top:.5px solid var(--separator); }
+  .ev b { font-variant-numeric:tabular-nums; font-weight:600; }
+  .ev.total b { font-size:19px; }
+  .ev.total span { color:var(--muted); font-size:13px; }
+  .muted { color:var(--muted); }
+
+  /* Wochenleiste */
+  .weekbar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:4px; }
+  .weekbar b { font-size:15px; font-weight:600; }
+  .nav {
+    appearance:none; border:.5px solid var(--glass-line); color:var(--blue);
+    background:var(--glass-2);
+    border-radius:50%; width:32px; height:32px; font-size:17px; line-height:1;
+    cursor:pointer; transition:background .15s ease;
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  }
+  .nav:hover { background:var(--glass); }
+
+  .day {
+    border-radius:var(--radius); padding:12px 14px; margin-top:10px;
+    background:var(--glass); border:.5px solid var(--glass-line);
+    box-shadow:var(--shadow), var(--glass-top);
+    backdrop-filter:var(--blur); -webkit-backdrop-filter:var(--blur);
+  }
+  .day.done { opacity:.6; }
+  .day-head { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+  .day-head b { font-size:15px; font-weight:600; }
+  .day-head .tag { font-size:13px; color:var(--muted); }
+  .day-fields { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+  .day-fields input[type=time] { width:auto; flex:1; padding:9px 10px; font-variant-numeric:tabular-nums; }
+  .day-fields button {
+    flex:0 0 auto; padding:9px 14px; border:0; border-radius:var(--radius-sm);
+    background:var(--blue); color:#fff; font:inherit; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .day-fields button:active { transform:scale(.985); }
+  .src { font-size:12px; color:var(--muted); margin-top:8px; }
+  .place-line { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .icon-btn {
+    flex:0 0 auto; width:26px; height:26px; padding:0; border:0; border-radius:50%;
+    background:var(--fill); color:var(--blue); font-size:13px; line-height:1; cursor:pointer;
+    transition:background .15s ease;
+  }
+  .icon-btn:hover { background:var(--fill-strong); }
+  .hint { font-size:13px; color:var(--muted); margin-top:12px; }
+
+  .settings-field { margin-top:14px; }
+  section > p:first-child { margin-top:0; }
+</style>
+</head>
+<body>
+  <header class="brand">
+    <svg width="34" height="34" viewBox="0 0 33 33" role="img" aria-label="peoplehub">
+      <path fill="#F21557" fill-rule="evenodd" d="M1.6 0h29.8A1.6 1.6 0 0 1 33 1.6v29.8a1.6 1.6 0 0 1-1.6 1.6H1.6A1.6 1.6 0 0 1 0 31.4V1.6A1.6 1.6 0 0 1 1.6 0ZM5 6h23v7H5Zm15 7h8v15h-8ZM5 22.5a5.5 5.5 0 1 0 11 0 5.5 5.5 0 0 0-11 0Z"/>
+    </svg>
+    <h1><span class="wm"><b>people</b>hub</span><span class="rule" aria-hidden="true"></span><span class="title">Time Tracking</span></h1>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" id="tab-today" role="tab" aria-selected="true">Heute</button>
+    <button class="tab" id="tab-week" role="tab" aria-selected="false">Nachtragen</button>
+    <button class="tab" id="tab-settings" role="tab" aria-selected="false">Einstellungen</button>
+  </div>
+
+  <section id="view-today">
+    <label for="startType">Art des Kommens</label>
+    <select id="startType"></select>
+
+    <label for="placeOfWork" style="margin-top:12px">Tätigkeitsstätte</label>
+    <select id="placeOfWork"></select>
+
+    <label for="time" style="margin-top:12px">Uhrzeit — leer bedeutet jetzt</label>
+    <input id="time" type="time" step="60">
+    <div class="row">
+      <button id="in" class="primary in">Kommt</button>
+      <button id="out" class="primary out">Geht</button>
+    </div>
+    <div class="card" id="today"><div class="ev"><span class="muted">Lade heutige Buchungen …</span></div></div>
+  </section>
+
+  <section id="view-week" hidden>
+    <div class="weekbar">
+      <button class="nav" id="prev-week" title="Vorherige Woche">‹</button>
+      <b id="week-label">—</b>
+      <button class="nav" id="next-week" title="Nächste Woche">›</button>
+    </div>
+    <div id="week-body"><p class="muted">Lade Woche …</p></div>
+    <div class="row"><button id="book-all" class="primary out">Alle offenen Tage übernehmen</button></div>
+    <p class="hint" id="week-hint"></p>
+  </section>
+
+  <section id="view-settings" hidden>
+    <div class="settings-field">
+      <label for="haUrl">Home-Assistant-Adresse</label>
+      <input id="haUrl" type="url" placeholder="http://homeassistant.local:8123">
+    </div>
+    <div class="settings-field">
+      <label for="haToken">Long-Lived Access Token</label>
+      <input id="haToken" type="password" placeholder="wird nur lokal gespeichert">
+    </div>
+    <div class="settings-field">
+      <label for="haEntity">Personen-Entität</label>
+      <input id="haEntity" type="text" placeholder="person.max">
+    </div>
+    <div class="settings-field">
+      <label for="haZone">Zonenname (Status-Text)</label>
+      <input id="haZone" type="text" placeholder="Work">
+    </div>
+    <div class="settings-field">
+      <label for="assignmentId">Assignment-ID</label>
+      <input id="assignmentId" type="text">
+    </div>
+    <div class="settings-field">
+      <label for="defaultStartType">Standard beim Kommen</label>
+      <select id="defaultStartType"></select>
+    </div>
+    <div class="settings-field">
+      <label for="legacyPlaceId">Tätigkeitsstätte für Zonen ohne Code</label>
+      <select id="legacyPlaceId"></select>
+    </div>
+    <div class="row"><button id="save-settings" class="primary out">Speichern</button></div>
+    <p class="hint">
+      Token in Home Assistant anlegen: Profil → Sicherheit → „Langlebige Zugriffstoken“.
+      Er wird nur lokal in Chrome gespeichert.
+    </p>
+  </section>
+
+  <div id="status" class="hidden"></div>
+
+  <script src="src/panel.js"></script>
+</body>
+</html>

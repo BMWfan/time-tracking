@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'fix/**'
+      - 'release/**'
+  pull_request:
+    branches:
+      - 'release/**'
+      - main
+
+jobs:
+  validate:
+    name: Validate extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json'));
+            if (m.manifest_version !== 3) { console.error('Expected manifest_version 3'); process.exit(1); }
+            if (!m.version) { console.error('Missing version field'); process.exit(1); }
+            for (const f of [m.background.service_worker, ...Object.values(m.icons)]) {
+              if (!fs.existsSync(f)) { console.error('Missing file referenced by manifest: ' + f); process.exit(1); }
+            }
+            console.log('manifest.json OK  (version ' + m.version + ')');
+          "
+
+      - name: Syntax-check all JS files
+        run: |
+          FAILED=0
+          for f in src/*.js; do
+            if node --check "$f" 2>&1; then
+              echo "  OK   $f"
+            else
+              echo "  FAIL $f"
+              FAILED=1
+            fi
+          done
+          exit $FAILED
+
+      - name: Assert no tenant-specific values are committed
+        run: |
+          # Event type codes, place-of-work codes and personal identifiers belong
+          # into the extension settings, never into the repository.
+          if grep -rnE '(DEU|AUT|CHE)_(Start|End|Office|A)_?[A-Za-z]*' \
+               --include='*.js' --include='*.html' --include='*.json' . \
+               | grep -v 'XXX_' ; then
+            echo "Found tenant-specific codes in the sources"
+            exit 1
+          fi
+          if grep -rnE '"assignmentId"\s*:\s*"[0-9]+"|person\.[a-z]+"' \
+               --include='*.js' --include='*.json' . ; then
+            echo "Found a hard-coded assignment or person entity"
+            exit 1
+          fi
+          echo "No tenant-specific values found"
