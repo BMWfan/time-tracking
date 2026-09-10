@@ -706,6 +706,7 @@ function loadSettings() {
 }
 
 function loadTypes() {
+  renderStatus({ phase: "working", message: "Lade Daten aus SuccessFactors …" });
   ask({ action: "types" }, (res) => {
     startTypes = (res && res.types) || [];
     typeReason = (res && (res.reason || res.msg)) || null;
@@ -718,6 +719,9 @@ function loadTypes() {
       fillPlaceSelect($("placeOfWork"), "");
       loadSettings();
       if (weekData && weekData.ok) renderWeek(weekData);
+
+      const problem = typeReason || placeReason;
+      renderStatus(problem ? { phase: "error", message: problem } : { phase: "idle" });
     });
   });
 }

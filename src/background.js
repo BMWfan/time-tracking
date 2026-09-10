@@ -249,21 +249,59 @@ function runInSf(func, args) {
 // Ausführung — erkennbar an diesen Meldungen, und mit Abstand behebbar.
 const TRANSIENT = /frame with id|no frame|frame was removed|no tab with id|cannot access/i;
 
-async function runInSfNow(func, args, attempt = 0) {
+// Ein Tab wird geliehen und über mehrere Aufrufe hinweg behalten, statt für
+// jeden Aufruf neu geöffnet und geschlossen zu werden. Beim Öffnen des Fensters
+// werden drei Listen nacheinander geholt — mit einem einzigen Tab ist das eine
+// Ladephase statt dreier.
+let lease = null;
+
+async function acquireLease() {
+  if (lease) {
+    lease.users++;
+    clearTimeout(lease.idleTimer);
+    return lease;
+  }
   const { tabId, temporary } = await acquireSfTab();
+  lease = { tabId, temporary, users: 1, idleTimer: null, fresh: temporary };
+  return lease;
+}
+
+function dropLease(current) {
+  if (lease === current) lease = null;
+  clearTimeout(current.idleTimer);
+  if (current.temporary) chrome.tabs.remove(current.tabId).catch(() => {});
+}
+
+function releaseLease(current, { discard = false } = {}) {
+  current.users = Math.max(0, current.users - 1);
+  if (current.users > 0) return;
+  if (discard) {
+    dropLease(current);
+    return;
+  }
+  // Kurz offen halten: der nächste Aufruf folgt meist unmittelbar.
+  current.idleTimer = setTimeout(() => dropLease(current), 12000);
+}
+
+async function runInSfNow(func, args, attempt = 0) {
+  const current = await acquireLease();
   try {
-    // Kurz warten, damit ein angehängter Wechsel der Adresse durch ist.
-    await new Promise((r) => setTimeout(r, temporary ? 700 : 150));
+    if (current.fresh) {
+      // Nur beim ersten Zugriff auf einen frisch geöffneten Tab warten, bis
+      // die Weiterleitungskette der Startseite durch ist.
+      await new Promise((r) => setTimeout(r, 700));
+      current.fresh = false;
+    }
     const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId: current.tabId },
       world: "MAIN",
       func,
       args
     });
-    if (temporary) chrome.tabs.remove(tabId).catch(() => {});
+    releaseLease(current);
     return result;
   } catch (err) {
-    if (temporary) chrome.tabs.remove(tabId).catch(() => {});
+    releaseLease(current, { discard: true });
     if (attempt < 2 && TRANSIENT.test(String(err && err.message))) {
       await new Promise((r) => setTimeout(r, 1200));
       return runInSfNow(func, args, attempt + 1);
