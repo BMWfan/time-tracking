@@ -271,7 +271,23 @@ function pageBook(assignmentId, entries) {
         });
 
         if (res.status === 201) {
-          results.push({ ...entry, ok: true });
+          // 201 heisst angenommen, nicht unbedingt gueltig: SuccessFactors
+          // beanstandet etwa nicht paarbare Ereignisse im Rumpf der Antwort.
+          let created = null;
+          try {
+            created = JSON.parse(await res.text());
+          } catch {}
+          const status = created && created.validationStatus;
+          const messages = (created && created.validationMessages) || [];
+          if (status && status !== "SUCCESS") {
+            const detail = messages
+              .map((m) => m.message || m.messageText || "")
+              .filter(Boolean)
+              .join(" ");
+            results.push({ ...entry, ok: false, msg: detail || ("Validierung: " + status) });
+          } else {
+            results.push({ ...entry, ok: true });
+          }
         } else if (res.status === 401 || res.status === 403) {
           return { ok: false, msg: "Sitzung abgelaufen", needsLogin: true };
         } else {
@@ -715,11 +731,19 @@ async function book(kind, timeStr, typeCode, placeId) {
 // Trägt für einen zurückliegenden Tag Kommen und Gehen nach.
 async function bookDays(items) {
   const cfg = await settings();
-  const { end } = await loadTypes();
+  const { end, reason } = await loadTypes();
   const entries = [];
   for (const item of items) {
     if (item.in) entries.push({ date: item.date, time: item.in, type: item.type || cfg.startType });
-    if (item.out && end) entries.push({ date: item.date, time: item.out, type: end });
+    if (item.out) {
+      // Ohne bekannten Gehen-Typ nicht stillschweigend die Haelfte buchen.
+      if (!end) {
+        const msg = "Gehen-Typ nicht ermittelbar" + (reason ? " (" + reason + ")" : "");
+        setState("error", msg);
+        return { ok: false, msg };
+      }
+      entries.push({ date: item.date, time: item.out, type: end });
+    }
   }
   if (!entries.length) return { ok: false, msg: "Nichts zu buchen" };
 
