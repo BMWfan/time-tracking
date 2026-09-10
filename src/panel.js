@@ -11,6 +11,7 @@ let startTypes = [];
 let typeReason = null;
 let endType = null;
 let places = [];
+let placeReason = null;
 
 // ------------------------------------------------------------- Hilfsmittel
 
@@ -210,7 +211,10 @@ function fillPlaceSelect(select, selectedId) {
   select.textContent = "";
   const none = document.createElement("option");
   none.value = "";
-  none.textContent = "— keine Angabe —";
+  // Ohne abrufbare Liste erklärt der Eintrag, woran es liegt.
+  none.textContent = places.length
+    ? "— keine Angabe —"
+    : "— " + (placeReason || "Tätigkeitsstätten nicht abrufbar") + " —";
   select.append(none);
   for (const p of places) {
     const opt = document.createElement("option");
@@ -588,6 +592,7 @@ function loadTypes() {
     if (endType) LABELS[endType] = "Ende";
     chrome.runtime.sendMessage({ action: "places" }, (r2) => {
       places = (r2 && r2.places) || [];
+      placeReason = (r2 && r2.reason) || null;
       fillPlaceSelect($("placeOfWork"), "");
       loadSettings();
       if (weekData && weekData.ok) renderWeek(weekData);

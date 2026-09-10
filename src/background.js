@@ -622,13 +622,22 @@ async function haTimes(cfg, startIso, endIso) {
 
 let placeCache = null;
 
+let placeReason = null;
+
 async function loadPlaces() {
   if (placeCache) return placeCache;
   try {
     const res = await runInSf(pagePlaces, []);
-    placeCache = res && res.ok ? res.places : [];
-  } catch {
-    placeCache = [];
+    if (res && res.ok) {
+      placeCache = res.places;
+      placeReason = null;
+    } else {
+      placeReason = (res && res.msg) || "Tätigkeitsstätten nicht abrufbar";
+      return [];
+    }
+  } catch (err) {
+    placeReason = String(err.message || err);
+    return [];
   }
   return placeCache;
 }
@@ -1012,7 +1021,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.action === "places") {
-    loadPlaces().then((places) => sendResponse({ ok: true, places }));
+    loadPlaces().then((places) =>
+      sendResponse({ ok: true, places, reason: places.length ? null : placeReason })
+    );
     return true;
   }
   if (msg.action === "set-place") {
