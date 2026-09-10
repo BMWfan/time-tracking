@@ -709,8 +709,15 @@ function renderBrand(name, icon) {
     h1.append(rule, title);
   }
 
-  // Favicon steuert Titelzeile und Taskleiste des Fensters.
-  $("favicon").href = icon || "icons/128.png";
+  // Favicon steuert Titelzeile und Taskleiste. Ein blosses Ändern von href
+  // greift nicht zuverlässig — der Knoten muss ersetzt werden.
+  const old = $("favicon");
+  const link = document.createElement("link");
+  link.id = "favicon";
+  link.rel = "icon";
+  link.type = "image/png";
+  link.href = icon || "icons/128.png";
+  old.replaceWith(link);
 
   const preview = $("brand-preview");
   preview.textContent = "";
