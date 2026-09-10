@@ -94,10 +94,19 @@ async function notify(title, message) {
   });
 }
 
-// Ein eigenes Symbol in der Symbolleiste setzen. Die Datei im Manifest bleibt
-// neutral; überschrieben wird nur zur Laufzeit aus dem Browser-Speicher.
+// Symbol und Sprechblase der Symbolleiste aus dem Browser-Speicher setzen. Die
+// Dateien im Manifest bleiben neutral. Der Name in der Erweiterungsliste des
+// Browsers stammt dagegen aus dem Manifest und ist zur Laufzeit nicht änderbar.
 async function applyBrandIcon() {
-  const { brandIcon } = await chrome.storage.local.get({ brandIcon: "" });
+  const { brandIcon, brandName } = await chrome.storage.local.get({
+    brandIcon: "",
+    brandName: DEFAULTS.brandName
+  });
+
+  const title = String(brandName || DEFAULTS.brandName)
+    .replace(/\*\*/g, "")
+    .replace(/\s*\|\s*/, " · ");
+  chrome.action.setTitle({ title });
   if (!brandIcon) {
     chrome.action.setIcon({ path: { 16: "icons/16.png", 32: "icons/32.png", 48: "icons/48.png", 128: "icons/128.png" } });
     return;

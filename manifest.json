@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Time Tracking",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "Clock in and out in SAP SuccessFactors Time Tracking, fill in missed days and set the place of work - from the toolbar, a keyboard shortcut or a desktop shortcut.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5xGPb2m0jjBwRMpVMUTvzmonRrgg6s9oAHaXKBcHT4uLJTR15duOffk1AgwGj7a/KvvP2WHbxAVE9Vz5tyFvUiMdhbF1Ep1KaHFuQsH/71xEOUsWHhmWwB5XpssOprBBW084Swu6yXnwlI1gp3qG3u3H2PmtzjYjbCLfCb2r1JIvUw1fxOb7eLeY+XsjlpTv3SMDu33nw49KIUheymvZrw4x5tLTv/8SJaV+JdOxcc8W/YUw6FivBorWeyQ8IBF5CjFHFZWzSpN7tesO8hdVwU1mwoXrRpEVQ87rXaMlkFC2Tz9tKanYjIKG+r0KUmfpCpX62MCUl2UOuDgqWL7w7QIDAQAB",
   "permissions": [
