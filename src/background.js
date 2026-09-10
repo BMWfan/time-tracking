@@ -590,9 +590,18 @@ function pageWeek(assignmentId, mondayIso, sundayIso, waitForValuation) {
           events.length >= 2 ? toMin(events[events.length - 1].time) - toMin(events[0].time) : null;
         // Pausen legt das System selbst an; die Tätigkeitsstätte hängt an den
         // Arbeitszeitsätzen.
-        const work = (d.attendances || []).filter((a) => a.origin !== "SYSTEM_GENERATED");
+        const work = (d.attendances || [])
+          .filter((a) => a.origin !== "SYSTEM_GENERATED")
+          .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
         return {
           placeId: (work.find((a) => a.cust_PlaceOfWork) || {}).cust_PlaceOfWork || null,
+          // Ein Tag kann mehrere Erfassungssätze haben — etwa vormittags
+          // Homeoffice, nachmittags Büro. Jeder trägt seine eigene Stätte.
+          attendances: work.map((a) => ({
+            start: a.startTime,
+            end: a.endTime,
+            placeId: a.cust_PlaceOfWork || null
+          })),
           hasAttendance: work.length > 0,
           date: d.shiftDate,
           isWorkingDay: d.isWorkingDay,
@@ -649,7 +658,72 @@ function pagePlaces() {
   })();
 }
 
-// Setzt die Tätigkeitsstätte an allen Arbeitszeitsätzen eines Tages.
+// Setzt die Tätigkeitsstätte je Arbeitszeitsatz. placeIds wird der Reihenfolge
+// nach zugeordnet; ein undefinierter Eintrag lässt den Satz unberührt.
+function pageSetPlaces(assignmentId, dateIso, placeIds) {
+  return (async () => {
+    const att = "/odatav4/timemanagement/attendance/AttendanceRecordingUi.svc/v2/";
+    const key = "assignmentId='" + assignmentId + "',shiftDate=" + dateIso;
+    try {
+      const sheet = await (
+        await fetch(att + "TimeSheetSummary(" + key + ")?$expand=days($expand=attendances)", {
+          credentials: "include",
+          headers: { Accept: "application/json" }
+        })
+      ).json();
+      const day = (sheet.days || []).find((d) => d.shiftDate === dateIso);
+      const records = ((day && day.attendances) || [])
+        .filter((a) => a.origin !== "SYSTEM_GENERATED" && a.mdfSystemRecordId)
+        .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
+      if (!records.length) {
+        return { ok: false, msg: "Für diesen Tag gibt es noch keinen Erfassungssatz" };
+      }
+
+      const probe = await fetch(att, {
+        credentials: "include",
+        headers: { "X-CSRF-Token": "Fetch", Accept: "application/json" }
+      });
+      const token = probe.headers.get("x-csrf-token");
+      if (!token) return { ok: false, msg: "Keine gültige SuccessFactors-Sitzung", needsLogin: true };
+
+      let written = 0;
+      for (let i = 0; i < records.length; i++) {
+        const wanted = placeIds[i];
+        if (wanted === undefined) continue;
+        const url =
+          att + "TimeSheetSummary(" + key + ")/days(" + key + ")/attendances('" +
+          encodeURIComponent(records[i].mdfSystemRecordId) + "')";
+        const res = await fetch(url, {
+          method: "PATCH",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "OData-Version": "4.0",
+            "OData-MaxVersion": "4.0",
+            "Accept-Language": "de-DE",
+            "X-CSRF-Token": token
+          },
+          body: JSON.stringify({ cust_PlaceOfWork: wanted ? String(wanted) : null })
+        });
+        if (!res.ok) {
+          const raw = await res.text();
+          let detail = raw;
+          try {
+            detail = (JSON.parse(raw).error || {}).message || raw;
+          } catch {}
+          return { ok: false, msg: String(detail).slice(0, 200), written };
+        }
+        written++;
+      }
+      return { ok: true, written };
+    } catch (err) {
+      return { ok: false, msg: "Netzwerkfehler: " + String(err) };
+    }
+  })();
+}
+
+// Setzt dieselbe Tätigkeitsstätte an allen Arbeitszeitsätzen eines Tages.
 function pageSetPlace(assignmentId, dateIso, placeId) {
   return (async () => {
     const att = "/odatav4/timemanagement/attendance/AttendanceRecordingUi.svc/v2/";
@@ -990,26 +1064,25 @@ async function bookDays(items) {
 // Überschreibt einen Tag. Die Tätigkeitsstätte wird vorher gelesen und
 // hinterher wieder gesetzt — der Erfassungssatz entsteht beim Neuanlegen neu
 // und käme sonst ohne sie zurück.
-async function replaceDay({ date, in: inTime, out, type, placeId }) {
+async function replaceDay({ date, events, placeIds }) {
   const cfg = await settings();
-  const { end } = await loadTypes();
 
-  if (!inTime || !out) return { ok: false, msg: "Kommen und Gehen müssen beide gesetzt sein" };
-  if (!end) return { ok: false, msg: "Gehen-Typ nicht ermittelbar" };
-
-  const entries = [
-    { time: inTime, type: type || cfg.startType },
-    { time: out, type: end }
-  ];
-  if (!entries[0].type) return { ok: false, msg: "Art des Kommens fehlt" };
+  const entries = (events || [])
+    .filter((e) => e && e.time && e.type)
+    .sort((a, b) => a.time.localeCompare(b.time));
+  if (!entries.length) return { ok: false, msg: "Kein Zeitereignis angegeben" };
 
   setState("working", "Tag wird überschrieben …");
   try {
-    // Bisheriger Ort sichern, falls im Formular keiner gewählt wurde.
+    // Bisherige Orte je Erfassungssatz sichern — der Satz entsteht beim
+    // Neuanlegen neu und käme sonst ohne sie zurück.
     const before = await loadWeek(date, false);
-    const previous = before && before.ok
-      ? (before.days.find((d) => d.date === date) || {}).placeId || null
-      : null;
+    const previous =
+      before && before.ok
+        ? ((before.days.find((d) => d.date === date) || {}).attendances || []).map(
+            (a) => a.placeId || null
+          )
+        : [];
 
     const result = await runInSf(pageReplaceDay, [cfg.assignmentId, date, entries]);
     if (!result || !result.ok) {
@@ -1019,15 +1092,18 @@ async function replaceDay({ date, in: inTime, out, type, placeId }) {
       return result || { ok: false, msg };
     }
 
-    const wanted = placeId || previous;
-    if (wanted) {
+    // Was im Formular gewählt wurde, hat Vorrang; sonst der gemerkte Wert.
+    const wanted = (placeIds && placeIds.length ? placeIds : previous).map((id, i) =>
+      id === undefined ? previous[i] : id
+    );
+    if (wanted.some((id) => id)) {
       // Der Erfassungssatz entsteht erst mit der Bewertung.
       await loadWeek(date, true);
-      result.place = await setPlace(date, wanted);
+      result.place = await runInSf(pageSetPlaces, [cfg.assignmentId, date, wanted]);
     }
 
     setState("ok", "Tag überschrieben");
-    notify("Tag überschrieben", inTime + " – " + out);
+    notify("Tag überschrieben", entries.map((e) => e.time).join(" · "));
     result.week = await loadWeek(date, false);
     return result;
   } catch (err) {
