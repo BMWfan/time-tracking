@@ -344,8 +344,13 @@ function pageTypes(assignmentId) {
       const data = await res.json();
       return {
         ok: true,
+        // Diese Liste führt das Feld als "code"; andere Dienste desselben
+        // Namensraums nennen es "externalCode". Beides zulassen.
         types: (data.value || [])
-          .map((t) => ({ code: t.externalCode, name: t.name }))
+          .map((t) => ({
+            code: t.code || t.externalCode || t.timeEventTypeCode,
+            name: t.name || t.description || t.timeEventTypeName
+          }))
           .filter((t) => t.code)
       };
     } catch (err) {
@@ -674,6 +679,11 @@ async function loadTypes() {
       return { start: [], end: null, reason: (res && res.msg) || "Typen nicht abrufbar" };
     }
     const all = res.types || [];
+    if (!all.length) {
+      // Leeres Ergebnis nicht merken, sonst bleibt ein einmaliger Aussetzer
+      // für die restliche Sitzung hängen.
+      return { start: [], end: null, reason: "Liste der Zeitereignistypen war leer" };
+    }
     const end = all.find((t) => END_PATTERN.test(t.code) || END_PATTERN.test(t.name));
     typeCache = {
       start: all.filter((t) => t !== end),
