@@ -27,7 +27,7 @@ jobs:
           VERSION=$(node -e "console.log(require('./manifest.json').version)")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
-          echo "zip=peoplehub-time-tracking-v${VERSION}.zip" >> $GITHUB_OUTPUT
+          echo "zip=time-tracking-v${VERSION}.zip" >> $GITHUB_OUTPUT
 
       - name: Skip if tag already exists
         id: check
@@ -90,6 +90,6 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             --verify-tag=false \
-            "$ZIP#peoplehub Time Tracking ${VERSION} (Chrome/Edge Extension)"
+            "$ZIP#Time Tracking ${VERSION} (Chrome/Edge Extension)"
 
           echo "https://github.com/${{ github.repository }}/releases/tag/$TAG"

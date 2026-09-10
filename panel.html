@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<title>peoplehub · Time Tracking</title>
+<title>Time Tracking</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -60,21 +60,21 @@
     }
   }
 
-  /* Lockup nach Fiori-Shell-Bar-Muster: Marke, Trennstrich, App-Titel.
-     Die Wortmarke bleibt unangetastet, der Produktname steht als eigener
-     Titel daneben — nicht an die Marke antypografiert. */
-  .brand { display:flex; align-items:center; margin:0 0 18px; }
-  .brand svg { flex:0 0 auto; border-radius:6px; box-shadow:0 2px 8px rgba(242,21,87,.32); }
-  h1 { display:flex; align-items:center; margin:0; font-size:17px; line-height:1; }
-  h1 .wm {
-    margin-left:10px;                 /* Schutzraum um die Marke */
-    font-weight:400; letter-spacing:-0.032em;
+  /* Symbol und Bezeichnung stammen aus den Einstellungen; hier steht nur der
+     neutrale Standard. Abstand nach dem Zeichen als Schutzraum. */
+  .brand { display:flex; align-items:center; gap:10px; margin:0 0 18px; }
+  .brand svg, .brand img {
+    flex:0 0 auto; width:32px; height:32px; border-radius:7px;
+    box-shadow:0 2px 8px rgba(0,0,0,.18);
   }
+  h1 {
+    display:flex; align-items:center; margin:0;
+    font-size:17px; font-weight:600; letter-spacing:-0.02em; line-height:1.2;
+  }
+  /* Auszeichnung aus der Einstellung: **fett** und | als Trennstrich */
+  h1 .wm { font-weight:400; letter-spacing:-0.032em; }
   h1 .wm b { font-weight:700; }
-  h1 .rule {
-    width:1px; height:17px; margin:0 12px;
-    background:currentColor; opacity:.22;
-  }
+  h1 .rule { width:1px; height:15px; margin:0 12px; background:currentColor; opacity:.14; }
   h1 .title { font-size:15px; font-weight:500; letter-spacing:-0.01em; color:var(--muted); }
 
   /* Segmented Control als Glaspille */
@@ -205,6 +205,13 @@
   .hint { font-size:13px; color:var(--muted); margin-top:12px; }
 
   .settings-field { margin-top:14px; }
+  .brand-picker { display:flex; align-items:center; gap:10px; }
+  .brand-preview {
+    flex:0 0 auto; width:36px; height:36px; border-radius:8px;
+    background:var(--fill); display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+  }
+  .brand-preview img { width:100%; height:100%; object-fit:cover; }
 
   /* Schalter für optionale Anbindungen */
   .toggle-row {
@@ -230,10 +237,14 @@
 </head>
 <body>
   <header class="brand">
-    <svg width="34" height="34" viewBox="0 0 33 33" role="img" aria-label="peoplehub">
-      <path fill="#F21557" fill-rule="evenodd" d="M1.6 0h29.8A1.6 1.6 0 0 1 33 1.6v29.8a1.6 1.6 0 0 1-1.6 1.6H1.6A1.6 1.6 0 0 1 0 31.4V1.6A1.6 1.6 0 0 1 1.6 0ZM5 6h23v7H5Zm15 7h8v15h-8ZM5 22.5a5.5 5.5 0 1 0 11 0 5.5 5.5 0 0 0-11 0Z"/>
-    </svg>
-    <h1><span class="wm"><b>people</b>hub</span><span class="rule" aria-hidden="true"></span><span class="title">Time Tracking</span></h1>
+    <span id="brand-mark">
+      <svg width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="">
+        <rect width="32" height="32" rx="7" fill="#2563EB"/>
+        <circle cx="16" cy="16" r="10" fill="none" stroke="#fff" stroke-width="2.4"/>
+        <path d="M16 16V9.8M16 16l5-3" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <h1 id="brand-name">Time Tracking</h1>
   </header>
 
   <div class="tabs" role="tablist">
@@ -271,6 +282,29 @@
 
   <section id="view-settings" hidden>
     <div class="settings-field">
+      <label for="brandName">Bezeichnung</label>
+      <input id="brandName" type="text" placeholder="Time Tracking">
+    </div>
+    <div class="settings-field">
+      <label for="brandIconFile">Eigenes Symbol (PNG, JPEG oder WebP)</label>
+      <div class="brand-picker">
+        <span id="brand-preview" class="brand-preview"></span>
+        <input id="brandIconFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        <button id="brand-pick" class="link">Bild wählen</button>
+        <button id="brand-reset" class="link">Zurücksetzen</button>
+      </div>
+    </div>
+    <p class="hint">
+      Bezeichnung und Symbol liegen im Browser-Speicher, nicht in den Dateien
+      der Erweiterung — ein Update überschreibt sie deshalb nicht. Das Bild wird
+      beim Speichern auf 128 × 128 verkleinert.
+      <br>
+      In der Bezeichnung wird <code>**Text**</code> fett gesetzt und
+      <code>|</code> zu einem Trennstrich, hinter dem der Rest kleiner und
+      grau erscheint.
+    </p>
+
+    <div class="settings-field" style="margin-top:20px; padding-top:16px; border-top:.5px solid var(--separator)">
       <label for="assignmentId">Assignment-ID</label>
       <input id="assignmentId" type="text" placeholder="Personalnummer der Zuordnung">
     </div>

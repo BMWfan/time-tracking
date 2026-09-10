@@ -1,4 +1,4 @@
-# peoplehub Time Tracking
+# Time Tracking
 
 A Chrome / Edge browser extension (Manifest V3) for **SAP SuccessFactors Time Tracking**. It books clock-in and clock-out events, fills in forgotten days, and sets the place of work — without opening the time sheet.
 

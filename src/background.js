@@ -11,6 +11,11 @@ const END_PATTERN = /(^|_)end$|^ende$/i;
 const HOMEOFFICE_PATTERN = /home.?office/i;
 
 const DEFAULTS = {
+  // Darstellung. Liegt im Browser-Speicher und wird von einem Update nicht
+  // angefasst — eine eigene Bezeichnung und ein eigenes Symbol bleiben also
+  // erhalten, während die Erweiterung selbst neutral ausgeliefert wird.
+  brandName: "Time Tracking",
+  brandIcon: "",
   // Personalnummer der Zuordnung; ohne sie kann nicht gebucht werden.
   assignmentId: "",
   startType: "",
@@ -71,15 +76,45 @@ function setState(phase, message, extra = {}) {
   chrome.runtime.sendMessage({ action: "state", state }).catch(() => {});
 }
 
-function notify(title, message) {
+async function notify(title, message) {
+  const { brandName, brandIcon } = await chrome.storage.local.get({
+    brandName: DEFAULTS.brandName,
+    brandIcon: DEFAULTS.brandIcon
+  });
   chrome.notifications.create({
     type: "basic",
-    iconUrl: "icons/128.png",
-    title,
+    iconUrl: brandIcon || "icons/128.png",
+    title: (brandName || DEFAULTS.brandName) + " — " + title,
     message,
     priority: 1
   });
 }
+
+// Ein eigenes Symbol in der Symbolleiste setzen. Die Datei im Manifest bleibt
+// neutral; überschrieben wird nur zur Laufzeit aus dem Browser-Speicher.
+async function applyBrandIcon() {
+  const { brandIcon } = await chrome.storage.local.get({ brandIcon: "" });
+  if (!brandIcon) {
+    chrome.action.setIcon({ path: { 16: "icons/16.png", 32: "icons/32.png", 48: "icons/48.png", 128: "icons/128.png" } });
+    return;
+  }
+  try {
+    const blob = await (await fetch(brandIcon)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const imageData = {};
+    for (const size of [16, 32, 48, 128]) {
+      const canvas = new OffscreenCanvas(size, size);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0, size, size);
+      imageData[size] = ctx.getImageData(0, 0, size, size);
+    }
+    chrome.action.setIcon({ imageData });
+  } catch {
+    // Unbrauchbares Bild: beim Standard bleiben, statt ohne Symbol zu enden.
+  }
+}
+
+chrome.runtime.onStartup.addListener(applyBrandIcon);
 
 // ------------------------------------------------------------------- Tabs
 
@@ -123,7 +158,7 @@ function waitForSfTab(tabId) {
           announced = true;
           setState("awaiting-login", "Anmeldung nötig — warte auf Login …", { loginTabId: tabId });
           notify(
-            "Peoplehub — Anmeldung nötig",
+            "Anmeldung nötig",
             "Die Sitzung ist abgelaufen. Im geöffneten Tab anmelden — danach wird automatisch weitergemacht."
           );
         }
@@ -143,7 +178,7 @@ function waitForSfTab(tabId) {
   });
 }
 
-// Liefert einen nutzbaren Peoplehub-Tab. Existiert keiner, wird einer im Hintergrund
+// Liefert einen nutzbaren SuccessFactors-Tab. Existiert keiner, wird einer im Hintergrund
 // geöffnet und als temporär markiert, damit er hinterher wieder verschwindet.
 async function acquireSfTab() {
   const tabs = await chrome.tabs.query({ url: SF_GLOB });
@@ -191,7 +226,7 @@ function pageBook(assignmentId, entries) {
         headers: { "X-CSRF-Token": "Fetch", Accept: "application/json" }
       });
       const token = probe.headers.get("x-csrf-token");
-      if (!token) return { ok: false, msg: "Keine gültige Peoplehub-Sitzung", needsLogin: true };
+      if (!token) return { ok: false, msg: "Keine gültige SuccessFactors-Sitzung", needsLogin: true };
 
       const results = [];
       for (const entry of entries) {
@@ -428,7 +463,7 @@ function pageSetPlace(assignmentId, dateIso, placeId) {
         headers: { "X-CSRF-Token": "Fetch", Accept: "application/json" }
       });
       const token = probe.headers.get("x-csrf-token");
-      if (!token) return { ok: false, msg: "Keine gültige Peoplehub-Sitzung", needsLogin: true };
+      if (!token) return { ok: false, msg: "Keine gültige SuccessFactors-Sitzung", needsLogin: true };
 
       for (const rec of records) {
         const url =
@@ -642,23 +677,23 @@ async function book(kind, timeStr, typeCode, placeId) {
         }
 
         const net = today && today.recordedMinutes;
-        notify("Peoplehub — " + label, net
+        notify(label, net
           ? "Gebucht um " + time + " — heute " + formatHm(net) + " erfasst"
           : "Gebucht um " + time);
       } else {
-        notify("Peoplehub — " + label, "Gebucht um " + time);
+        notify(label, "Gebucht um " + time);
       }
       result.time = time;
       return result;
     }
     const msg = (result && result.msg) || "Unbekannter Fehler";
     setState("error", msg);
-    notify("Peoplehub — " + label + " fehlgeschlagen", msg);
+    notify(label + " fehlgeschlagen", msg);
     return result || { ok: false, msg };
   } catch (err) {
     const msg = String(err.message || err);
     setState("error", msg);
-    notify("Peoplehub — " + label + " fehlgeschlagen", msg);
+    notify(label + " fehlgeschlagen", msg);
     return { ok: false, msg };
   }
 }
@@ -686,17 +721,17 @@ async function bookDays(items) {
       }
       const days = new Set(entries.map((e) => e.date)).size;
       setState("ok", days === 1 ? "Tag nachgetragen" : days + " Tage nachgetragen");
-      notify("Peoplehub — Nachtrag", days === 1 ? "1 Tag nachgetragen" : days + " Tage nachgetragen");
+      notify("Nachtrag", days === 1 ? "1 Tag nachgetragen" : days + " Tage nachgetragen");
     } else {
       const msg = (result && result.msg) || "Unbekannter Fehler";
       setState("error", msg);
-      notify("Peoplehub — Nachtrag fehlgeschlagen", msg);
+      notify("Nachtrag fehlgeschlagen", msg);
     }
     return result;
   } catch (err) {
     const msg = String(err.message || err);
     setState("error", msg);
-    notify("Peoplehub — Nachtrag fehlgeschlagen", msg);
+    notify("Nachtrag fehlgeschlagen", msg);
     return { ok: false, msg };
   }
 }
@@ -747,7 +782,7 @@ async function loadWeek(anyDateInWeek, waitForValuation = false) {
 // Deshalb vergleichen wir die eigene Version täglich mit dem neuesten
 // GitHub-Release und melden uns, wenn eine neuere vorliegt. Installiert wird
 // nichts — das bleibt ein bewusster Schritt des Nutzers.
-const REPO = "BMWfan/peoplehub-time-tracking";
+const REPO = "BMWfan/time-tracking";
 const UPDATE_ALARM = "update-check";
 
 function parseVersion(text) {
@@ -799,7 +834,7 @@ async function checkForUpdate({ quiet = true } = {}) {
         await chrome.storage.local.set({ notifiedVersion: latest });
       }
       notify(
-        "peoplehub Time Tracking — Version " + latest + " verfügbar",
+        "Version " + latest + " verfügbar",
         "Installiert ist " + current + ". Zum Herunterladen auf diese Meldung klicken."
       );
     } else {
@@ -877,6 +912,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "types") {
     loadTypes().then(({ start, end }) => sendResponse({ ok: true, types: start, endType: end }));
     return true;
+  }
+  if (msg.action === "brand-changed") {
+    applyBrandIcon();
+    sendResponse({ ok: true });
+    return false;
   }
   if (msg.action === "check-update") {
     checkForUpdate({ quiet: false }).then(sendResponse);

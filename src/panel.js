@@ -486,7 +486,7 @@ $("book-all").addEventListener("click", () => {
 // ----------------------------------------------------------- Einstellungen
 
 const SETTING_IDS = [
-  "assignmentId", "fallbackIn", "fallbackOut",
+  "brandName", "assignmentId", "fallbackIn", "fallbackOut",
   "haUrl", "haToken", "haEntity", "haZone"
 ];
 
@@ -503,6 +503,8 @@ function loadSettings() {
     for (const id of SETTING_IDS) $(id).value = cfg[id] || "";
     $("haEnabled").checked = Boolean(cfg.haEnabled);
     syncHaFields();
+    brandIcon = cfg.brandIcon || "";
+    renderBrand(cfg.brandName, brandIcon);
     fallback = { in: cfg.fallbackIn || "08:00", out: cfg.fallbackOut || "16:45" };
     fallbackType = cfg.startType || (startTypes[0] && startTypes[0].code) || "";
     fillTypeSelect($("startType"), fallbackType);
@@ -532,6 +534,7 @@ $("save-settings").addEventListener("click", async () => {
   if ($("defaultStartType").value) values.startType = $("defaultStartType").value;
   values.legacyPlaceId = $("legacyPlaceId").value || "";
   values.haEnabled = $("haEnabled").checked;
+  values.brandIcon = brandIcon;
 
   if (values.haEnabled && (!values.haUrl || !values.haToken)) {
     renderStatus({ phase: "error", message: "Für Home Assistant fehlen Adresse oder Token" });
@@ -555,8 +558,108 @@ $("save-settings").addEventListener("click", async () => {
 
   chrome.runtime.sendMessage({ action: "set-settings", values }, () => {
     renderStatus({ phase: "ok", message: "Einstellungen gespeichert" });
+    renderBrand(values.brandName, brandIcon);
+    chrome.runtime.sendMessage({ action: "brand-changed" });
     weekData = null;
   });
+});
+
+// ---------------------------------------------------------- Darstellung
+
+// Eigenes Symbol: auf 128 × 128 verkleinern und als Data-URI ablegen. So bleibt
+// der Browser-Speicher klein und das Bild in jeder Größe brauchbar.
+function toIconDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Bild nicht lesbar"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Bildformat nicht unterstützt"));
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 128;
+        const ctx = canvas.getContext("2d");
+        // Quadratischer Ausschnitt aus der Mitte, damit nichts verzerrt.
+        const side = Math.min(img.width, img.height);
+        ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 128, 128);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+let brandIcon = "";
+
+// Setzt **Text** fett und trennt an | in Wortmarke und kleineren Titel.
+// Aufgebaut wird über Textknoten, damit aus der Einstellung kein Markup
+// in die Seite gelangt.
+function appendMarkup(target, text) {
+  for (const part of String(text).split(/(\*\*[^*]+\*\*)/)) {
+    if (!part) continue;
+    const bold = part.match(/^\*\*([^*]+)\*\*$/);
+    if (bold) {
+      const b = document.createElement("b");
+      b.textContent = bold[1];
+      target.append(b);
+    } else {
+      target.append(document.createTextNode(part));
+    }
+  }
+}
+
+function renderBrand(name, icon) {
+  const raw = name || "Time Tracking";
+  const [left, right] = raw.split("|");
+
+  const h1 = $("brand-name");
+  h1.textContent = "";
+  const wordmark = document.createElement("span");
+  wordmark.className = "wm";
+  appendMarkup(wordmark, left.trim());
+  h1.append(wordmark);
+
+  if (right && right.trim()) {
+    const rule = document.createElement("span");
+    rule.className = "rule";
+    rule.setAttribute("aria-hidden", "true");
+    const title = document.createElement("span");
+    title.className = "title";
+    appendMarkup(title, right.trim());
+    h1.append(rule, title);
+  }
+
+  const preview = $("brand-preview");
+  preview.textContent = "";
+  if (icon) {
+    const mark = document.createElement("img");
+    mark.src = icon;
+    mark.alt = "";
+    $("brand-mark").replaceChildren(mark.cloneNode());
+    preview.append(mark);
+  }
+  document.title = raw.replace(/\*\*/g, "").replace(/\s*\|\s*/, " · ");
+}
+
+$("brand-pick").addEventListener("click", () => $("brandIconFile").click());
+
+$("brandIconFile").addEventListener("change", async () => {
+  const file = $("brandIconFile").files[0];
+  if (!file) return;
+  try {
+    brandIcon = await toIconDataUrl(file);
+    renderBrand($("brandName").value, brandIcon);
+    renderStatus({ phase: "ok", message: "Symbol gewählt — jetzt speichern" });
+  } catch (err) {
+    renderStatus({ phase: "error", message: String(err.message || err) });
+  }
+});
+
+$("brand-reset").addEventListener("click", () => {
+  brandIcon = "";
+  $("brand-preview").textContent = "";
+  renderStatus({ phase: "ok", message: "Symbol zurückgesetzt — jetzt speichern" });
 });
 
 // ----------------------------------------------------------- Aktualisierung
