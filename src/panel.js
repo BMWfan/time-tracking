@@ -693,6 +693,9 @@ function renderBrand(name, icon) {
     h1.append(rule, title);
   }
 
+  // Favicon steuert Titelzeile und Taskleiste des Fensters.
+  $("favicon").href = icon || "icons/128.png";
+
   const preview = $("brand-preview");
   preview.textContent = "";
   if (icon) {

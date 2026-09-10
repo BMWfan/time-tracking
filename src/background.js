@@ -119,6 +119,10 @@ async function applyBrandIcon() {
 }
 
 chrome.runtime.onStartup.addListener(applyBrandIcon);
+chrome.runtime.onInstalled.addListener(applyBrandIcon);
+// Der Service Worker wird beendet und neu gestartet; das Symbol muss dabei
+// jedes Mal neu gesetzt werden, sonst greift wieder das Standardsymbol.
+applyBrandIcon();
 
 // ------------------------------------------------------------------- Tabs
 
