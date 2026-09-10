@@ -81,7 +81,7 @@ Everything tenant- and person-specific lives in the extension's **Settings** tab
 
 | Setting | Meaning |
 |---|---|
-| Name and icon | Shown in the panel and on the toolbar. `**bold**` sets part of the name bold, `|` adds a separator after which the rest appears smaller and grey. The icon takes a PNG, JPEG or WebP file, scaled to 128 × 128. Both live in browser storage, so an update never overwrites them. |
+| Name and icon | Shown in the panel, on the toolbar button, in the window title and in notifications. `**bold**` sets part of the name bold, `|` adds a separator after which the rest appears smaller and grey. The icon takes a PNG, JPEG or WebP file, scaled to 128 × 128. Both live in browser storage, so an update never overwrites them. |
 | Default type of arrival | Pre-selected in the *Today* tab and used by the keyboard and desktop shortcuts. |
 | Default times | Proposed when filling in a day and nothing better is known. Defaults to 08:00 / 16:45. |
 
@@ -133,6 +133,23 @@ Two details worth knowing:
 
 - The **place of work** is not part of a time event. It belongs to the attendance record, which only exists once arrival and departure have been paired — that is why it is written after clocking out. The field expects the picklist's `internalId` as a string; the external code is rejected.
 - Writing the place of work changes the record's `origin` from `IMPORT` to `UNKNOWN`. The times stay untouched, but the record is no longer flagged as imported from punches.
+
+---
+
+### What the settings cannot reach
+
+Two places are fixed by the browser and no API changes them at runtime:
+
+- **The name in the browser's extension list** comes from `manifest.json`.
+- **The taskbar icon of the panel window** is taken from the manifest icons when the window is created — the toolbar button and the title bar do follow the configured icon, the taskbar does not.
+
+For an unpacked install both can be changed by editing the files. `scripts/sync-local.py` helps with the icon:
+
+```bash
+python scripts/sync-local.py /path/to/loaded/folder --icon my-logo.png
+```
+
+A store-installed extension keeps the shipped mark in the taskbar.
 
 ---
 
