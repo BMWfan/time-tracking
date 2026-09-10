@@ -196,8 +196,10 @@ function waitForSfTab(tabId, timeoutMs = LOGIN_TIMEOUT_MS) {
         return;
       }
 
+      // Erst wenn die Adresse für einen Moment stabil bleibt, ist die
+      // Weiterleitungskette der Startseite durch.
       finish();
-      resolve({ neededLogin: announced });
+      setTimeout(() => resolve({ neededLogin: announced }), 400);
     }
     function onRemoved(id) {
       if (id !== tabId) return;
@@ -242,9 +244,16 @@ function runInSf(func, args) {
   return task;
 }
 
-async function runInSfNow(func, args) {
+// Die Startseite leitet nach dem Laden noch intern weiter. Trifft die
+// Einspritzung diesen Moment, verschwindet der Rahmen mitten in der
+// Ausführung — erkennbar an diesen Meldungen, und mit Abstand behebbar.
+const TRANSIENT = /frame with id|no frame|frame was removed|no tab with id|cannot access/i;
+
+async function runInSfNow(func, args, attempt = 0) {
   const { tabId, temporary } = await acquireSfTab();
   try {
+    // Kurz warten, damit ein angehängter Wechsel der Adresse durch ist.
+    await new Promise((r) => setTimeout(r, temporary ? 700 : 150));
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
@@ -255,6 +264,10 @@ async function runInSfNow(func, args) {
     return result;
   } catch (err) {
     if (temporary) chrome.tabs.remove(tabId).catch(() => {});
+    if (attempt < 2 && TRANSIENT.test(String(err && err.message))) {
+      await new Promise((r) => setTimeout(r, 1200));
+      return runInSfNow(func, args, attempt + 1);
+    }
     throw err;
   }
 }
