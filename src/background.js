@@ -5,7 +5,11 @@
 const SF_GLOBS = ["https://*.successfactors.eu/*", "https://*.successfactors.com/*"];
 // Der stille SSO-Durchlauf dauert Sekunden. Muss der Nutzer selbst anmelden,
 // darf das dauern - deshalb der grosszuegige Rahmen statt eines Abbruchs.
-const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+// Innerhalb einer Anfrage aus dem Fenster darf nicht lange gewartet werden:
+// Der Service Worker wird nach kurzer Untätigkeit beendet, und dann bleibt die
+// Antwort aus und das Fenster hängt. Also kurz warten und sonst melden, dass
+// eine Anmeldung offen ist — der Nutzer versucht es danach erneut.
+const LOGIN_TIMEOUT_MS = 20 * 1000;
 
 // Zeitereignistypen sind je Mandant konfiguriert. Sie werden zur Laufzeit aus
 // SuccessFactors gelesen; im Code steht keine Liste. Erkannt wird lediglich,
@@ -158,13 +162,19 @@ function isLoginUrl(url) {
   }
 }
 
-function waitForSfTab(tabId) {
+function waitForSfTab(tabId, timeoutMs = LOGIN_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let announced = false;
     const timer = setTimeout(() => {
       finish();
-      reject(new Error("Zeitüberschreitung: keine Anmeldung innerhalb von 5 Minuten"));
-    }, LOGIN_TIMEOUT_MS);
+      reject(
+        new Error(
+          announced
+            ? "Anmeldung noch offen — nach dem Login erneut versuchen"
+            : "Zeitüberschreitung beim Laden von SuccessFactors"
+        )
+      );
+    }, timeoutMs);
 
     function finish() {
       clearTimeout(timer);

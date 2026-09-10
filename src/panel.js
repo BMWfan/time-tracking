@@ -15,6 +15,29 @@ let placeReason = null;
 
 // ------------------------------------------------------------- Hilfsmittel
 
+// Anfrage an den Dienst mit Zeitgrenze. Wird der Service Worker mitten in der
+// Bearbeitung beendet, bleibt die Antwort sonst aus und das Fenster hängt.
+function ask(message, onDone, timeoutMs = 25000) {
+  let settled = false;
+  const finish = (res) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    onDone(res);
+  };
+  const timer = setTimeout(
+    () => finish({ ok: false, msg: "Zeitüberschreitung — erneut versuchen" }),
+    timeoutMs
+  );
+  chrome.runtime.sendMessage(message, (res) => {
+    if (chrome.runtime.lastError) {
+      finish({ ok: false, msg: "Verbindung zum Dienst abgebrochen — erneut versuchen" });
+      return;
+    }
+    finish(res);
+  });
+}
+
 const pad = (n) => String(n).padStart(2, "0");
 
 function hm(minutes) {
@@ -181,7 +204,7 @@ function loadWeek(anyDate, wait = false) {
   const target = anyDate || new Date();
   $("week-body").textContent = "";
   $("week-body").append(muted("Lade Woche …"));
-  chrome.runtime.sendMessage({ action: "week", date: isoDate(new Date(target)), wait }, applyWeek);
+  ask({ action: "week", date: isoDate(new Date(target)), wait }, applyWeek, wait ? 40000 : 25000);
 }
 
 // Füllt ein <select> mit den für den Nutzer zulässigen Kommen-Typen. Ist die
@@ -228,7 +251,7 @@ function fillPlaceSelect(select, selectedId) {
 function book(kind) {
   const type = kind === "in" ? $("startType").value || null : null;
   const placeId = kind === "out" ? $("placeOfWork").value || null : null;
-  chrome.runtime.sendMessage({ action: "book", kind, type, placeId, time: $("time").value || null }, (res) => {
+  ask({ action: "book", kind, type, placeId, time: $("time").value || null }, (res) => {
     if (!res || !res.ok) return;
     // Beim Ausstempeln liegt die bewertete Woche schon bei; sonst nachladen.
     if (res.week) applyWeek(res.week);
@@ -291,8 +314,8 @@ function placeEditor(day, selectedId) {
   save.textContent = "Ort sichern";
   save.addEventListener("click", () => {
     save.disabled = true;
-    chrome.runtime.sendMessage(
-      { action: "set-place", date: day.date, placeId: place.value || null },
+    ask(
+            { action: "set-place", date: day.date, placeId: place.value || null },
       () => loadWeek(currentMonday)
     );
   });
@@ -373,7 +396,7 @@ function renderWeek(week) {
         go.textContent = "Ende buchen";
         go.addEventListener("click", () => {
           go.disabled = true;
-          chrome.runtime.sendMessage(
+          ask(
             {
               action: "book-days",
               items: [{ date: day.date, out: to.value, placeId: day.suggestPlaceId || null }]
@@ -441,9 +464,9 @@ function renderWeek(week) {
       const go = document.createElement("button");
       go.textContent = "Übernehmen";
       go.addEventListener("click", () => {
-        chrome.runtime.sendMessage(
-          {
-            action: "book-days",
+        ask(
+            {
+              action: "book-days",
             items: [
               { date: day.date, in: from.value, out: to.value, type: type.value, placeId: place.value || null }
             ]
@@ -506,7 +529,9 @@ $("book-all").addEventListener("click", () => {
     placeId: el.querySelector('select[data-role="place"]').value || null
   }));
   if (!items.length) return;
-  chrome.runtime.sendMessage({ action: "book-days", items }, () => loadWeek(currentMonday, true));
+  ask(
+            {
+              action: "book-days", items }, () => loadWeek(currentMonday, true));
 });
 
 // ----------------------------------------------------------- Einstellungen
@@ -584,15 +609,15 @@ function loadSettings() {
 }
 
 function loadTypes() {
-  chrome.runtime.sendMessage({ action: "types" }, (res) => {
+  ask({ action: "types" }, (res) => {
     startTypes = (res && res.types) || [];
-    typeReason = (res && res.reason) || null;
+    typeReason = (res && (res.reason || res.msg)) || null;
     endType = (res && res.endType) || null;
     for (const t of startTypes) LABELS[t.code] = t.name;
     if (endType) LABELS[endType] = "Ende";
-    chrome.runtime.sendMessage({ action: "places" }, (r2) => {
+    ask({ action: "places" }, (r2) => {
       places = (r2 && r2.places) || [];
-      placeReason = (r2 && r2.reason) || null;
+      placeReason = (r2 && (r2.reason || r2.msg)) || null;
       fillPlaceSelect($("placeOfWork"), "");
       loadSettings();
       if (weekData && weekData.ok) renderWeek(weekData);
@@ -782,7 +807,7 @@ function renderUpdate(info) {
 // Öffnen des Fensters keine angemeldete SuccessFactors-Sitzung bestand.
 $("refresh-lists").addEventListener("click", () => {
   renderStatus({ phase: "working", message: "Lade Listen …" });
-  chrome.runtime.sendMessage({ action: "refresh-lists" }, (res) => {
+  ask({ action: "refresh-lists" }, (res) => {
     startTypes = (res && res.types) || [];
     typeReason = (res && res.typeReason) || null;
     endType = (res && res.endType) || null;
@@ -810,7 +835,7 @@ $("refresh-lists").addEventListener("click", () => {
 
 $("check-update").addEventListener("click", () => {
   $("update-hint").textContent = "Prüfe …";
-  chrome.runtime.sendMessage({ action: "check-update" }, renderUpdate);
+  ask({ action: "check-update" }, renderUpdate, 15000);
 });
 
 // ------------------------------------------------------- Fenstergroesse
