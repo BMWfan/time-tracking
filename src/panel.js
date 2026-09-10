@@ -324,7 +324,10 @@ function renderWeek(week) {
 
     // Ein Tag, dessen letztes Ereignis kein Ende ist, hängt offen.
     const last = day.events[day.events.length - 1];
-    const needsEnd = Boolean(last) && Boolean(endType) && last.type !== endType;
+    // Ein offenes Kommen erkennt man auch ohne Typenliste: Ereignisse treten
+    // paarweise auf, eine ungerade Anzahl heißt, das Gehen fehlt.
+    const needsEnd = Boolean(last) &&
+      (endType ? last.type !== endType : day.events.length % 2 === 1);
 
     if (day.holiday) tag.textContent = day.holiday;
     else if (!day.isWorkingDay) tag.textContent = "kein Arbeitstag";
@@ -451,11 +454,19 @@ function renderWeek(week) {
 
       const src = document.createElement("div");
       src.className = "src";
-      src.textContent = s.fromHa
-        ? day.suggestZone
-          ? "Aus Home Assistant · " + day.suggestZone.replace(/\s*\([^)]*\)\s*$/, "")
-          : "Vorschlag aus Home Assistant"
-        : "Vorschlag: Standardzeiten";
+      if (day.gapMinutes) {
+        // Vor der ersten Ankunft fehlten Meldungen — der Wert kann zu spät sein.
+        src.classList.add("warn");
+        src.textContent =
+          "Unsicher: ab " + day.gapFrom + " für " + hm(day.gapMinutes) +
+          " Stunden keine Standortmeldung — Ankunft womöglich früher";
+      } else {
+        src.textContent = s.fromHa
+          ? day.suggestZone
+            ? "Aus Home Assistant · " + day.suggestZone.replace(/\s*\([^)]*\)\s*$/, "")
+            : "Vorschlag aus Home Assistant"
+          : "Vorschlag: Standardzeiten";
+      }
       wrap.append(src);
     }
 

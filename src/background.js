@@ -584,6 +584,7 @@ async function haTimes(cfg, startIso, endIso) {
 
     const perDay = {};
     let prev = null;
+    let prevAt = null;
     for (const point of series) {
       const at = new Date(point.last_changed || point.last_updated);
       const day = isoDate(at);
@@ -596,9 +597,20 @@ async function haTimes(cfg, startIso, endIso) {
         slot.in = time;
         slot.zone = point.state;
         slot.place = placeOfWorkFrom(point.state);
+        // Meldet das Gerät stundenlang nichts, kann die Ankunft deutlich
+        // früher gelegen haben. Dann ist der Wert ein Anhaltspunkt, keine
+        // Messung — der Aufrufer soll das kennzeichnen können.
+        if (prevAt && isoDate(prevAt) === day) {
+          const gap = Math.round((at - prevAt) / 60000);
+          if (gap > 90) {
+            slot.gapMinutes = gap;
+            slot.gapFrom = pad(prevAt.getHours()) + ":" + pad(prevAt.getMinutes());
+          }
+        }
       }
       if (!nowAtWork && wasAtWork) slot.out = time;
       prev = point.state;
+      prevAt = at;
     }
     return { ok: true, perDay };
   } catch (err) {
@@ -810,6 +822,8 @@ async function loadWeek(anyDateInWeek, waitForValuation = false) {
       day.suggestSource = suggestion.in || suggestion.out ? "ha" : "fallback";
       day.suggestPlace = suggestion.place || null;
       day.suggestZone = suggestion.zone || null;
+      day.gapMinutes = suggestion.gapMinutes || null;
+      day.gapFrom = suggestion.gapFrom || null;
       day.suggestPlaceId = suggestion.place
         ? await placeIdForCode(suggestion.place)
         : suggestion.in
