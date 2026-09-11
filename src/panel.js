@@ -470,6 +470,24 @@ function dayEditor(day, onCancel) {
       return;
     }
 
+    // Verschwindet ein Paar, bleibt sein Erfassungssatz womöglich als Leiche
+    // stehen: von außen angelegte Sätze lassen sich weder über die
+    // Schnittstelle noch in der Oberfläche löschen.
+    const vorher = (day.attendances || []).length;
+    const nachher = pairsFromRows().filter((p) => p.end).length;
+    if (
+      vorher &&
+      nachher < vorher &&
+      !confirm(
+        "Es fallen " + (vorher - nachher) + " Erfassungssätze weg.\n\n" +
+          "SuccessFactors löscht einen Satz nur, wenn danach wieder Zeitereignisse " +
+          "in seinem Zeitraum liegen. Sonst bleibt er stehen und lässt sich " +
+          "nachträglich nur noch von der Zeitwirtschaft entfernen.\n\nTrotzdem speichern?"
+      )
+    ) {
+      return;
+    }
+
     const placeIds = [...placeBox.querySelectorAll('select[data-role="place"]')].map(
       (el) => el.value || null
     );
