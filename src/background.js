@@ -298,6 +298,21 @@ async function runInSfNow(func, args, attempt = 0) {
       func,
       args
     });
+
+    // Abgelaufene Sitzung: die Seite neu laden, damit die Anmeldung greift.
+    // Läuft sie still durch, merkt der Nutzer nichts; sonst wartet er auf den
+    // Login und der Aufruf wird einmal wiederholt.
+    if (result && result.needsLogin && attempt < 1) {
+      const home =
+        "https://" + (await settings()).sfHost.replace(/^https?:\/\//, "").replace(/\/+$/, "") +
+        "/sf/start";
+      await chrome.tabs.update(current.tabId, { url: home });
+      await waitForSfTab(current.tabId);
+      current.fresh = true;
+      releaseLease(current);
+      return runInSfNow(func, args, attempt + 1);
+    }
+
     releaseLease(current);
     return result;
   } catch (err) {
