@@ -1091,15 +1091,26 @@ async function bookDays(items) {
   try {
     const result = await runInSf(pageBook, [cfg.assignmentId, entries]);
     if (result && result.ok) {
-      // Nach dem Nachtragen liegen beide Stempel vor, der Erfassungssatz also auch.
+      const failed = [];
       for (const item of items) {
         if (!item.placeId) continue;
         setState("working", "Tätigkeitsstätte wird gesetzt …");
-        await setPlace(item.date, item.placeId);
+        // Der Erfassungssatz entsteht erst mit der Bewertung — ohne dieses
+        // Warten gibt es nichts, woran die Stätte hängen könnte.
+        await loadWeek(item.date, true);
+        const set = await setPlace(item.date, item.placeId);
+        if (!set || !set.ok) failed.push(item.date + ": " + ((set && set.msg) || "unbekannt"));
       }
+
       const days = new Set(entries.map((e) => e.date)).size;
-      setState("ok", days === 1 ? "Tag nachgetragen" : days + " Tage nachgetragen");
-      notify("Nachtrag", days === 1 ? "1 Tag nachgetragen" : days + " Tage nachgetragen");
+      if (failed.length) {
+        const msg = "Zeiten gebucht, Tätigkeitsstätte nicht — " + failed[0];
+        setState("error", msg);
+        notify("Nachtrag unvollständig", msg);
+      } else {
+        setState("ok", days === 1 ? "Tag nachgetragen" : days + " Tage nachgetragen");
+        notify("Nachtrag", days === 1 ? "1 Tag nachgetragen" : days + " Tage nachgetragen");
+      }
     } else {
       const msg = (result && result.msg) || "Unbekannter Fehler";
       setState("error", msg);
